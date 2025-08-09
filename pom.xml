@@ -1,0 +1,123 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>jenkinslsp</groupId>
+  <artifactId>server</artifactId>
+  <version>1.0.0</version>
+  <name>Groovy LSP</name>
+  <description>Self-contained Groovy 2.5.23 LSP server JAR</description>
+  <packaging>jar</packaging>
+  <properties>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <maven.compiler.source>1.8</maven.compiler.source>
+    <maven.compiler.target>1.8</maven.compiler.target>
+    <!-- Tweak if your main class differs -->
+    <main.class>jenkinslsp.server.LspServer</main.class>
+    <!-- Dependency/plugin versions -->
+    <groovy.version>2.5.23</groovy.version>
+    <gmavenplus.version>1.14.2</gmavenplus.version>
+    <shade.plugin.version>3.5.3</shade.plugin.version>
+  </properties>
+  <dependencies>
+    <!-- Core Groovy runtime -->
+    <dependency>
+      <groupId>org.codehaus.groovy</groupId>
+      <artifactId>groovy</artifactId>
+      <version>${groovy.version}</version>
+    </dependency>
+    <!-- You use groovy.json.* -->
+    <dependency>
+      <groupId>org.codehaus.groovy</groupId>
+      <artifactId>groovy-json</artifactId>
+      <version>${groovy.version}</version>
+    </dependency>
+    <!-- (Optional but harmless) include groovy-cli if you later add CLI parsing -->
+    <!--
+    <dependency>
+      <groupId>org.codehaus.groovy</groupId>
+      <artifactId>groovy-cli-commons</artifactId>
+      <version>${groovy.version}</version>
+    </dependency>
+    -->
+  </dependencies>
+  <build>
+    <plugins>
+      <!-- Compile Groovy sources in src/main/groovy -->
+      <plugin>
+        <groupId>org.codehaus.gmavenplus</groupId>
+        <artifactId>gmavenplus-plugin</artifactId>
+        <version>${gmavenplus.version}</version>
+        <executions>
+          <execution>
+            <goals>
+              <goal>addSources</goal>
+              <goal>addTestSources</goal>
+              <goal>compile</goal>
+              <goal>testCompile</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+      <!-- Create a single, runnable, dependency-shaded JAR -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-shade-plugin</artifactId>
+        <version>${shade.plugin.version}</version>
+        <executions>
+          <execution>
+            <phase>package</phase>
+            <goals>
+              <goal>shade</goal>
+            </goals>
+            <configuration>
+              <!-- Attach as *-all.jar -->
+              <shadedArtifactAttached>true</shadedArtifactAttached>
+              <shadedClassifierName>all</shadedClassifierName>
+              <!-- Keep original POM; not strictly needed but avoids dependencyReducedPom churn -->
+              <createDependencyReducedPom>false</createDependencyReducedPom>
+              <transformers>
+                <!-- Set the entrypoint -->
+                <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                  <mainClass>${main.class}</mainClass>
+                  <manifestEntries>
+                    <Multi-Release>false</Multi-Release>
+                  </manifestEntries>
+                </transformer>
+                <!-- Merge service descriptors (Groovy + others use these) -->
+                <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer" />
+                <!-- Merge Groovy extension modules if any appear -->
+                <transformer implementation="org.apache.maven.plugins.shade.resource.AppendingTransformer">
+                  <resource>META-INF/groovy/org.codehaus.groovy.runtime.ExtensionModule</resource>
+                </transformer>
+              </transformers>
+              <!-- Strip signature files that can break shaded JARs -->
+              <filters>
+                <filter>
+                  <artifact>*:*</artifact>
+                  <excludes>
+                    <exclude>META-INF/*.SF</exclude>
+                    <exclude>META-INF/*.DSA</exclude>
+                    <exclude>META-INF/*.RSA</exclude>
+                  </excludes>
+                </filter>
+              </filters>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+      <!-- (Optional) ensure consistent JAR manifest even without shade -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-jar-plugin</artifactId>
+        <version>3.4.2</version>
+        <configuration>
+          <archive>
+            <manifest>
+              <mainClass>${main.class}</mainClass>
+            </manifest>
+          </archive>
+        </configuration>
+      </plugin>
+    </plugins>
+  </build>
+</project>
