@@ -17,7 +17,7 @@ echo "This is a flattened filetree represented as a YAML."
 echo ""
 echo 'integration-tests: '
 echo '```'
-{ ./integration-tests-runner.groovy -d 2>&1 || true; }
+{ ./integration-tests.groovy  2>&1 || true; }
 echo '```'
 echo ""
 echo "Implement what is required to fix the failing integration tests and output it in the same flattened filetree YAML structure as was provided before."

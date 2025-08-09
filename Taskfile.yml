@@ -36,4 +36,4 @@ tasks:
     cmds:
       # TODO
       # - mvn package
-      - ./integration-tests-runner.groovy {{.CLI_ARGS}}
+      - ./integration-tests.groovy {{.CLI_ARGS}}
