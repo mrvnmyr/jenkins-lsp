@@ -1,4 +1,4 @@
-package example
+package jenkinslsp
 
 /**
  * Centralized logging used by all modules.

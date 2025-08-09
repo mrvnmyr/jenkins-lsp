@@ -1,4 +1,4 @@
-package example
+package jenkinslsp
 
 import org.codehaus.groovy.ast.ClassNode
 import org.codehaus.groovy.control.SourceUnit

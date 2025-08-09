@@ -1,4 +1,4 @@
-package example
+package jenkinslsp
 
 import groovy.json.JsonSlurper
 import groovy.json.JsonOutput

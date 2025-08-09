@@ -1,4 +1,4 @@
-package example
+package jenkinslsp
 
 /**
  * Heuristics that operate purely on strings/regex, intentionally separated from

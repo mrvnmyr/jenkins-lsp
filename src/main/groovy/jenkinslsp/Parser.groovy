@@ -1,4 +1,4 @@
-package example
+package jenkinslsp
 
 import groovy.json.JsonOutput
 import org.codehaus.groovy.ast.MethodNode

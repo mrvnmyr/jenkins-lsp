@@ -1,4 +1,4 @@
-package example
+package jenkinslsp
 
 import groovy.json.JsonOutput
 import org.codehaus.groovy.control.SourceUnit
@@ -106,7 +106,7 @@ class LspServer {
         }
         // If inside a double-quoted string but NOT inside a ${...} placeholder, do not resolve
         if (StringHeuristics.isInsideDoubleQuotedString(lineText, position.character) && !StringHeuristics.isInsideGStringPlaceholder(lineText, position.character)) {
-            Logging.log("Position is inside a string literal (not in \\${...}); skipping definition lookup.")
+            Logging.log('Position is inside a string literal (not in \\${...}); skipping definition lookup.')
             transport.sendMessage([jsonrpc: "2.0", id: message.id, result: null])
             return
         }
