@@ -1,0 +1,39 @@
+version: '3'
+
+# includes:
+#   subproject:
+#     taskfile: ./subproject/
+#     dir: ./subproject/
+
+tasks:
+  clean:
+    deps: []
+    cmds:
+      - mvn clean
+
+  build:
+    deps: []
+    sources:
+      - ./src/**/*.*
+      - ./pom.xml
+    generates:
+      - ./target/**/*.*
+    cmds:
+      # - mvn package
+      - mvn -q -DskipTests package
+
+  cycle:
+    deps: [build]
+    cmds:
+      - java -jar ./target/jenkins-lsp-1.0.0-all.jar
+
+  test:
+    deps: [build]
+    # sources:
+    #   - ./target/**/*.*
+    #   - ./integration-tests/**/*.*
+    #   - ./integration-test-runner.groovy
+    cmds:
+      # TODO
+      # - mvn package
+      - ./integration-tests-runner.groovy {{.CLI_ARGS}}
