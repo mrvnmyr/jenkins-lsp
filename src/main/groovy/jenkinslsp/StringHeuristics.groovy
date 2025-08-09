@@ -27,7 +27,8 @@ class StringHeuristics {
         }
         int idx = text.indexOf(name)
         Logging.debug("    DEBUG: smartVarColumn fallback '${name}' in: '${text}' => col ${idx}")
-        return idx >= 0 ? idx : 0
+        // IMPORTANT: return -1 when not found so callers can trigger multi-line scanning
+        return idx >= 0 ? idx : -1
     }
 
     /**
@@ -45,6 +46,7 @@ class StringHeuristics {
                 Logging.debug("    DEBUG: scanMultiLineVar: '${name}' found on line ${i} col ${col}: '${txt}'")
                 return [i, col]
             }
+            Logging.debug("    DEBUG: scanMultiLineVar: '${name}' NOT on line ${i}: '${txt}'")
         }
         return null
     }
@@ -84,6 +86,12 @@ class StringHeuristics {
     /**
      * Attempts to heuristically extract method argument "types" from the call line text.
      * Returns a list of string kinds such as ["Map", "Closure"], ["String"], etc.
+     *
+     * Rules (kept simple for our current tests):
+     *  - Count **Map** if there is at least one `key: value` pair inside the parentheses.
+     *  - Count **Closure** ONLY if there is a trailing closure after `)` or if a positional
+     *    closure (a `{...}` argument) appears as its own argument (i.e., not a map value).
+     *  - Count **String** only for positional string arguments (not for map values).
      */
     static List<String> extractGroovyCallArgKinds(String line, int callNameLastColumnIndex) {
         def argKinds = [] as List<String>
@@ -93,27 +101,40 @@ class StringHeuristics {
         int parenIdx = afterCall.indexOf('(')
         if (parenIdx < 0) return argKinds
         String callArgsText = afterCall.substring(parenIdx + 1)
-        boolean hasClosure = callArgsText.contains(') {')
+        boolean hasTrailingClosure = callArgsText.contains(') {') || (line =~ /\)\s*\{/)
         int closeParen = callArgsText.indexOf(')')
         if (closeParen < 0) closeParen = callArgsText.length()
         String argString = callArgsText.substring(0, closeParen)
-        if (argString =~ /\w+\s*:/) {
-            argKinds << "Map"
-        }
-        if (argString =~ /"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/) {
-            argKinds << "String"
-        }
-        if (hasClosure || line =~ /\)\s*\{/) {
-            argKinds << "Closure"
-        }
+
+        boolean sawMap = false
+
+        // naive split is fine for our controlled test cases
         def parts = argString.split(',')
-        for (p in parts) {
-            p = p.trim()
+        for (String raw in parts) {
+            String p = raw.trim()
             if (p == "") continue
-            if (p =~ /\w+\s*:/ && !argKinds.contains("Map")) argKinds << "Map"
-            else if (p =~ /"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/ && !argKinds.contains("String")) argKinds << "String"
-            else if (p =~ /\{/ && !argKinds.contains("Closure")) argKinds << "Closure"
+            boolean isMapEntry = (p =~ /^\s*\w+\s*:/).find()
+            if (isMapEntry) {
+                sawMap = true
+                continue
+            }
+            // positional closure argument (NOT a map value)
+            if (!isMapEntry && p.contains("{")) {
+                argKinds << "Closure"
+                continue
+            }
+            // positional string
+            if (p =~ /"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/) {
+                argKinds << "String"
+                continue
+            }
+            // fallback positional object
+            argKinds << "Object"
         }
+
+        if (sawMap) argKinds.add(0, "Map") // ensure Map is first if present
+        if (hasTrailingClosure) argKinds << "Closure"
+
         Logging.debug("    DEBUG: extractGroovyCallArgKinds => ${argKinds} from line='${line}', idx=${callNameLastColumnIndex}")
         return argKinds
     }

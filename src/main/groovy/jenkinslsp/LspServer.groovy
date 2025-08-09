@@ -137,9 +137,13 @@ class LspServer {
         // Fallback: identifier under cursor
         def wordMatcher = (lineText =~ /\b\w+\b/)
         def word = null
+        int wordStart = -1
+        int wordEnd = -1
         while (wordMatcher.find()) {
             if (wordMatcher.start() <= position.character && position.character < wordMatcher.end()) {
                 word = wordMatcher.group()
+                wordStart = wordMatcher.start()
+                wordEnd = wordMatcher.end()
                 break
             }
         }
@@ -148,6 +152,8 @@ class LspServer {
             while (leftMatcher.find()) {
                 if (leftMatcher.end() == position.character) {
                     word = leftMatcher.group()
+                    wordStart = leftMatcher.start()
+                    wordEnd = leftMatcher.end()
                 }
             }
             if (word) Logging.log("Cursor on '.', using left qualifier word '${word}'")
@@ -227,8 +233,33 @@ class LspServer {
             Logging.log("Variable/parameter '${word}' NOT found in locals for method: " + (contextMethod ? "${contextMethod.name} [${contextMethod.lineNumber}-${contextMethod.lastLineNumber}]" : "<none>"))
         }
 
+        // If looks like an unqualified method call at this cursor, try overload resolution on the enclosing class (e.g., Script)
+        boolean isUnqualifiedCall = (wordEnd >= 0 && wordEnd < (lineText?.length() ?: 0) && lineText.charAt(wordEnd) == '(')
+        if (contextClass && isUnqualifiedCall) {
+            def callArgs = StringHeuristics.extractGroovyCallArgKinds(lineText, wordEnd - 1)
+            Logging.log("Unqualified call detected for '${word}' with arg kinds: ${callArgs}")
+            def mr = AstNavigator.findFieldOrPropertyInHierarchy(contextClass, word, lines, "preferMethod", callArgs, lastParsedUnit)
+            if (mr) {
+                Logging.log("Resolved unqualified call '${word}' to ${mr.line}:${mr.column}")
+                transport.sendMessage([
+                    jsonrpc: "2.0",
+                    id: message.id,
+                    result: [
+                        uri: message.params.textDocument.uri,
+                        range: [
+                            start: [line: mr.line, character: mr.column],
+                            end:   [line: mr.line, character: mr.column + word.length()]
+                        ]
+                    ]
+                ])
+                return
+            } else {
+                Logging.log("Unqualified call overload resolution for '${word}' failed; will continue with generic search.")
+            }
+        }
+
         if (contextClass) {
-            def res = AstNavigator.findFieldOrPropertyInHierarchy(contextClass, word, lines, "any")
+            def res = AstNavigator.findFieldOrPropertyInHierarchy(contextClass, word, lines, "any", null, lastParsedUnit)
             if (res) {
                 Logging.log("Resolved class property/field/method '${word}' to line ${res.line} column ${res.column}")
                 transport.sendMessage([

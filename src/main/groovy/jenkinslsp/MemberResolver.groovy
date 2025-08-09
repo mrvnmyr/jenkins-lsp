@@ -46,7 +46,7 @@ class MemberResolver {
             ClassNode classNode = AstNavigator.findClassForLine(unit, lineNum + 1)
             if (classNode) {
                 List callArgs = isMethodCall ? StringHeuristics.extractGroovyCallArgKinds(lineText, memberStart + memberName.length() - 1) : null
-                def res = AstNavigator.findFieldOrPropertyInHierarchy(classNode, memberName, lines, isMethodCall ? "preferMethod" : "preferField", callArgs)
+                def res = AstNavigator.findFieldOrPropertyInHierarchy(classNode, memberName, lines, isMethodCall ? "preferMethod" : "preferField", callArgs, unit)
                 if (res) {
                     Logging.log("Resolved this.${memberName} to line ${res.line}, column ${res.column}")
                     return [found: true, matchAtCursor: true, debug: "this.${memberName}->${classNode.name}", line: res.line, column: res.column, word: memberName]
@@ -100,7 +100,7 @@ class MemberResolver {
             }
             if (classNode) {
                 List callArgs = isMethodCall ? StringHeuristics.extractGroovyCallArgKinds(lineText, memberStart + memberName.length() - 1) : null
-                def res = AstNavigator.findFieldOrPropertyInHierarchy(classNode, memberName, lines, isMethodCall ? "preferMethod" : "preferField", callArgs)
+                def res = AstNavigator.findFieldOrPropertyInHierarchy(classNode, memberName, lines, isMethodCall ? "preferMethod" : "preferField", callArgs, unit)
                 if (res) {
                     Logging.log("Resolved ${varName}.${memberName} to line ${res.line}, column ${res.column}")
                     return [found: true, matchAtCursor: true, debug: "${varName}.${memberName}->${type}", line: res.line, column: res.column, word: memberName]

@@ -25,6 +25,7 @@ class AstNavigator {
         for (Parameter p : method.parameters) {
             int l = (p.lineNumber ?: 1) - 1
             int c = StringHeuristics.smartVarColumn(lines, l, p.name)
+            if (c < 0) c = 0
             locals[p.name] = [type: (p.type?.name ?: "def"), line: l, column: c, kind: "param"]
             Logging.log("  Found parameter: ${p.name} at ${l}:${c} type: ${p.type?.name}")
         }
@@ -42,6 +43,7 @@ class AstNavigator {
                         if (c < 0) {
                             def ml = StringHeuristics.scanMultiLineVar(lines, l, name)
                             if (ml) { l = ml[0] as int; c = ml[1] as int }
+                            else { c = 0 } // last resort
                         }
                         String typeName = expr.leftExpression.type?.name ?: "def"
                         if (typeName == "java.lang.Object" && prevTypeName && prevTypeLine == l - 1) {
@@ -101,6 +103,7 @@ class AstNavigator {
             if (cls.nameWithoutPackage == word) {
                 int l = cls.lineNumber > 0 ? cls.lineNumber - 1 : 0
                 int c = StringHeuristics.smartVarColumn(lines, l, word)
+                if (c < 0) c = 0
                 Logging.log("Found class '${word}' at ${l}:${c}")
                 return [line: l, column: c, word: word]
             }
@@ -108,6 +111,7 @@ class AstNavigator {
                 if (method.name == word) {
                     int l = method.lineNumber > 0 ? method.lineNumber - 1 : 0
                     int c = StringHeuristics.smartVarColumn(lines, l, word)
+                    if (c < 0) c = 0
                     Logging.log("Found class method '${word}' at ${l}:${c}")
                     return [line: l, column: c, word: word]
                 }
@@ -117,6 +121,7 @@ class AstNavigator {
             if (method.name == word) {
                 int l = method.lineNumber > 0 ? method.lineNumber - 1 : 0
                 int c = StringHeuristics.smartVarColumn(lines, l, word)
+                if (c < 0) c = 0
                 Logging.log("Found top-level method '${word}' at ${l}:${c}")
                 return [line: l, column: c, word: word]
             }
@@ -155,10 +160,25 @@ class AstNavigator {
      * Enhanced: Find property, field, or method in the class hierarchy. Includes a scoring/arity
      * heuristic for selecting the best method overload.
      * Returns [type, node, line, column, word] or null
+     *
+     * NOTE: 'unit' is used to rebind superClass placeholders to actual AST class declarations from this file,
+     * which fixes inherited-member lookups like resolving Bar->Foo#foo.
      */
-    static Map findFieldOrPropertyInHierarchy(ClassNode cls, String name, List<String> lines, String mode = "any", List methodArgs = null) {
+    static Map findFieldOrPropertyInHierarchy(ClassNode cls, String name, List<String> lines, String mode = "any", List methodArgs = null, SourceUnit unit = null) {
         def orig = cls
+
+        // Helper to map by name to the SourceUnit's actual class node (if present)
+        Closure<ClassNode> rebindToUnit = { ClassNode c ->
+            if (!c || !unit) return c
+            def exact = unit.AST.classes.find { it.name == c.name }
+            if (exact) return exact
+            def bySimple = unit.AST.classes.find { it.nameWithoutPackage == c.nameWithoutPackage }
+            return bySimple ?: c
+        }
+
         while (cls != null) {
+            cls = rebindToUnit(cls)
+
             Logging.log("Searching for property/method '${name}' in class: ${cls.name} (mode: ${mode}, methodArgs: ${methodArgs})")
             // 1) Properties
             def properties = []
@@ -168,6 +188,7 @@ class AstNavigator {
                 def l = prop.field?.lineNumber ?: prop.getterBlock?.lineNumber ?: cls.lineNumber ?: 1
                 l = l > 0 ? l - 1 : 0
                 def c = StringHeuristics.smartVarColumn(lines, l, name)
+                if (c < 0) c = 0
                 Logging.log("      DEBUG: found property ${name} at ${l}:${c} [fieldPresent: ${prop.field!=null}]")
                 return [type: 'property', node: prop, line: l, column: c, word: name]
             }
@@ -178,6 +199,7 @@ class AstNavigator {
             if (foundField && (mode == "any" || mode == "preferField")) {
                 def l = foundField.lineNumber > 0 ? foundField.lineNumber - 1 : 0
                 def c = StringHeuristics.smartVarColumn(lines, l, name)
+                if (c < 0) c = 0
                 Logging.log("      DEBUG: found field ${name} at ${l}:${c}")
                 return [type: 'field', node: foundField, line: l, column: c, word: name]
             }
@@ -190,6 +212,7 @@ class AstNavigator {
                     def foundMethod = candidateMethods[0]
                     def l = foundMethod.lineNumber > 0 ? foundMethod.lineNumber - 1 : 0
                     def c = StringHeuristics.smartVarColumn(lines, l, name)
+                    if (c < 0) c = 0
                     Logging.log("      DEBUG: found method ${name} at ${l}:${c}")
                     return [type: 'method', node: foundMethod, line: l, column: c, word: name]
                 }
@@ -230,6 +253,7 @@ class AstNavigator {
                 if (bestMethod) {
                     def l = bestMethod.lineNumber > 0 ? bestMethod.lineNumber - 1 : 0
                     def c = StringHeuristics.smartVarColumn(lines, l, name)
+                    if (c < 0) c = 0
                     Logging.log("      DEBUG: matched method ${name} at ${l}:${c} (params: ${bestMatchInfo.params}, score: ${bestMatchInfo.score})")
                     return [type: 'method', node: bestMethod, line: l, column: c, word: name]
                 } else {
