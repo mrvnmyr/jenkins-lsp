@@ -43,7 +43,7 @@ class AstNavigator {
                         if (c < 0) {
                             def ml = StringHeuristics.scanMultiLineVar(lines, l, name)
                             if (ml) { l = ml[0] as int; c = ml[1] as int }
-                            else { c = 0 } // last resort
+                            else { c = 0 }
                         }
                         String typeName = expr.leftExpression.type?.name ?: "def"
                         if (typeName == "java.lang.Object" && prevTypeName && prevTypeLine == l - 1) {
@@ -167,17 +167,25 @@ class AstNavigator {
     static Map findFieldOrPropertyInHierarchy(ClassNode cls, String name, List<String> lines, String mode = "any", List methodArgs = null, SourceUnit unit = null) {
         def orig = cls
 
-        // Helper to map by name to the SourceUnit's actual class node (if present)
+        // Guard against cycles across Script <-> groovy.lang.Script etc.
+        def visited = new HashSet<String>()
+
+        // Helper to map by exact FQN to the SourceUnit's actual class node (if present)
         Closure<ClassNode> rebindToUnit = { ClassNode c ->
             if (!c || !unit) return c
             def exact = unit.AST.classes.find { it.name == c.name }
-            if (exact) return exact
-            def bySimple = unit.AST.classes.find { it.nameWithoutPackage == c.nameWithoutPackage }
-            return bySimple ?: c
+            return exact ?: c
         }
 
         while (cls != null) {
             cls = rebindToUnit(cls)
+
+            String k = cls?.name ?: "<null>"
+            if (visited.contains(k)) {
+                Logging.log("      DEBUG: Breaking hierarchy search due to cycle at ${k}")
+                break
+            }
+            visited.add(k)
 
             Logging.log("Searching for property/method '${name}' in class: ${cls.name} (mode: ${mode}, methodArgs: ${methodArgs})")
             // 1) Properties

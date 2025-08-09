@@ -234,7 +234,20 @@ class LspServer {
         }
 
         // If looks like an unqualified method call at this cursor, try overload resolution on the enclosing class (e.g., Script)
-        boolean isUnqualifiedCall = (wordEnd >= 0 && wordEnd < (lineText?.length() ?: 0) && lineText.charAt(wordEnd) == '(')
+        boolean nextCharIsParen = (wordEnd >= 0 && wordEnd < (lineText?.length() ?: 0) && lineText.charAt(wordEnd) == '(')
+        // Guard: don't treat "new Foo(" (constructor) as an unqualified method call
+        boolean precededByNew = false
+        if (nextCharIsParen && wordStart > 0) {
+            int i = wordStart - 1
+            while (i >= 0 && Character.isWhitespace(lineText.charAt(i))) i--
+            int end = i
+            while (i >= 0 && Character.isJavaIdentifierPart(lineText.charAt(i))) i--
+            String prevWord = (end >= 0 && i < end) ? lineText.substring(i + 1, end + 1) : ""
+            precededByNew = "new".equals(prevWord)
+            Logging.log("Unqualified-call check: prevWord='${prevWord}', precededByNew=${precededByNew}, nextCharIsParen=${nextCharIsParen}")
+        }
+        boolean isUnqualifiedCall = nextCharIsParen && !precededByNew
+
         if (contextClass && isUnqualifiedCall) {
             def callArgs = StringHeuristics.extractGroovyCallArgKinds(lineText, wordEnd - 1)
             Logging.log("Unqualified call detected for '${word}' with arg kinds: ${callArgs}")

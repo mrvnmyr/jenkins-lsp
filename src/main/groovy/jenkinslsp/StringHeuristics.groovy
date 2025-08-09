@@ -116,6 +116,7 @@ class StringHeuristics {
             boolean isMapEntry = (p =~ /^\s*\w+\s*:/).find()
             if (isMapEntry) {
                 sawMap = true
+                // Map values may contain strings/closures; we must NOT treat them as positional args
                 continue
             }
             // positional closure argument (NOT a map value)
@@ -129,7 +130,7 @@ class StringHeuristics {
                 continue
             }
             // fallback positional object
-            argKinds << "Object"
+            if (p) argKinds << "Object"
         }
 
         if (sawMap) argKinds.add(0, "Map") // ensure Map is first if present
