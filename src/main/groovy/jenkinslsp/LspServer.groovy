@@ -31,7 +31,16 @@ class LspServer {
                     transport.sendMessage([
                         jsonrpc: "2.0",
                         id: message.id,
-                        result: [ capabilities: [ textDocumentSync: 1, definitionProvider: true ]]
+                        result: [
+                            capabilities: [
+                                textDocumentSync : 1,
+                                definitionProvider: true,
+                                completionProvider: [
+                                    triggerCharacters: ['.'],
+                                    resolveProvider  : false
+                                ]
+                            ]
+                        ]
                     ])
                     break
 
@@ -42,6 +51,10 @@ class LspServer {
 
                 case 'textDocument/definition':
                     handleDefinition(message)
+                    break
+
+                case 'textDocument/completion':
+                    handleCompletion(message)
                     break
 
                 default:
@@ -324,5 +337,36 @@ class LspServer {
 
         Logging.log("Definition not found for: '${word}'")
         transport.sendMessage([jsonrpc: "2.0", id: message.id, result: null])
+    }
+
+    private void handleCompletion(Object message) {
+        if (!lastParsedUnit || lastSourceText == null) {
+            transport.sendMessage([jsonrpc: "2.0", id: message.id, result: [isIncomplete:false, items: []]])
+            return
+        }
+        def position = message.params?.position
+        def lines = lastSourceText.readLines()
+        if (position.line < 0 || position.line >= lines.size()) {
+            transport.sendMessage([jsonrpc: "2.0", id: message.id, result: [isIncomplete:false, items: []]])
+            return
+        }
+        def lineText = lines[position.line] ?: ""
+        // ignore inside comments or non-placeholder strings
+        def commentIndex = lineText.indexOf("//")
+        if (commentIndex >= 0 && position.character > commentIndex) {
+            transport.sendMessage([jsonrpc: "2.0", id: message.id, result: [isIncomplete:false, items: []]])
+            return
+        }
+        if (StringHeuristics.isInsideDoubleQuotedString(lineText, position.character) && !StringHeuristics.isInsideGStringPlaceholder(lineText, position.character)) {
+            transport.sendMessage([jsonrpc: "2.0", id: message.id, result: [isIncomplete:false, items: []]])
+            return
+        }
+
+        def items = CompletionEngine.suggest(lastParsedUnit, lastSourceText, position.line, position.character)
+        transport.sendMessage([
+            jsonrpc: "2.0",
+            id: message.id,
+            result: [ isIncomplete: false, items: items ?: [] ]
+        ])
     }
 }
