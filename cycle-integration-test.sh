@@ -59,6 +59,9 @@ echo "Now paste it to ChatGPT and wait for the result."
 
 wait-for-enter "after you have copied the result to your clipboard"
 
-./exchange.sh
+expando
 
-./integration-test-runner.groovy
+go-task test
+
+# ./exchange.sh
+# ./integration-test-runner.groovy
