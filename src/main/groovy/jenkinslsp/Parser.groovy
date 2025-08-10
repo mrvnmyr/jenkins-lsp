@@ -26,10 +26,34 @@ class Parser {
 
     static ParseResult parseGroovy(String sourceText) {
         Logging.log("Parsing Groovy source: ${sourceText}")
+
+        // --- PATCH: make parser tolerant to trailing '.' so AST is still built ---
+        // We create a *patched* copy of the text for parsing only (keeps original
+        // text for position math and logging). This mirrors the trailing-dot
+        // diagnostic heuristic in LspServer, but additionally guarantees unit.AST.
+        String effectiveText = sourceText ?: ""
+        try {
+            List<String> lines = effectiveText.readLines()
+            int idx = lines.size() - 1
+            while (idx >= 0 && (lines[idx]?.trim()?.length() ?: 0) == 0) idx--
+            boolean trailingDot = (idx >= 0) && (lines[idx]?.trim()?.endsWith("."))
+            if (trailingDot) {
+                Logging.log("Parser: detected trailing '.' at line ${idx}; patching for AST build.")
+                // Append a harmless identifier after the '.' so the source remains parseable.
+                // Example: 'Bar.' -> 'Bar.__LSP_STUB__'
+                lines[idx] = lines[idx] + "__LSP_STUB__"
+                effectiveText = lines.join("\n")
+            }
+        } catch (Throwable t) {
+            // Non-fatal; continue with original text if anything goes wrong.
+            Logging.log("Parser: trailing-dot patch failed: ${t.class.name}: ${t.message}")
+        }
+        // --- END PATCH ---
+
         def diagnostics = []
         def config = new CompilerConfiguration()
         def loader = new GroovyClassLoader()
-        def unit = new SourceUnit("Script.groovy", sourceText, config, loader, null)
+        def unit = new SourceUnit("Script.groovy", effectiveText, config, loader, null)
         try {
             unit.parse()
             unit.completePhase()
@@ -66,6 +90,7 @@ class Parser {
                 }
             }
         }
+        // Return the *original* source text so cursor math & logs remain exact.
         return new ParseResult(unit, sourceText, diagnostics)
     }
 
