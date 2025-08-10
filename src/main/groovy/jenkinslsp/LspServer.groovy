@@ -149,11 +149,20 @@ class LspServer {
                 transport.sendMessage([jsonrpc: "2.0", id: message.id, result: null])
                 return
             }
-            // If inside a double-quoted string but NOT inside a ${...} placeholder, do not resolve
-            if (StringHeuristics.isInsideDoubleQuotedString(lineText, position.character) && !StringHeuristics.isInsideGStringPlaceholder(lineText, position.character)) {
-                Logging.log('Position is inside a string literal (not in \\${...}); skipping definition lookup.')
-                transport.sendMessage([jsonrpc: "2.0", id: message.id, result: null])
-                return
+
+            // Allow GString $var lookups even when NOT using ${...}
+            String forcedWordFromGString = null
+            boolean insideDq = StringHeuristics.isInsideDoubleQuotedString(lineText, position.character)
+            boolean insidePlaceholder = StringHeuristics.isInsideGStringPlaceholder(lineText, position.character)
+            if (insideDq && !insidePlaceholder) {
+                forcedWordFromGString = StringHeuristics.gstringVarAt(lineText, position.character)
+                if (forcedWordFromGString) {
+                    Logging.log("Inside GString without braces; treating '\$${forcedWordFromGString}' as identifier at cursor.")
+                } else {
+                    Logging.log('Position is inside a string literal (no $var at cursor); skipping definition lookup.')
+                    transport.sendMessage([jsonrpc: "2.0", id: message.id, result: null])
+                    return
+                }
             }
 
             // Strict qualified property/member lookup at the cursor
@@ -179,19 +188,29 @@ class LspServer {
                 return
             }
 
-            // Fallback: identifier under cursor
+            // Fallback: identifier under cursor (or forced from $var)
             def wordMatcher = (lineText =~ /\b\w+\b/)
-            def word = null
+            def word = forcedWordFromGString
             int wordStart = -1
             int wordEnd = -1
-            while (wordMatcher.find()) {
-                if (wordMatcher.start() <= position.character && position.character < wordMatcher.end()) {
-                    word = wordMatcher.group()
-                    wordStart = wordMatcher.start()
-                    wordEnd = wordMatcher.end()
-                    break
+            if (!word) {
+                while (wordMatcher.find()) {
+                    if (wordMatcher.start() <= position.character && position.character < wordMatcher.end()) {
+                        word = wordMatcher.group()
+                        wordStart = wordMatcher.start()
+                        wordEnd = wordMatcher.end()
+                        break
+                    }
+                }
+            } else {
+                // best-effort to set bounds for downstream unqualified-call check
+                def m2 = (lineText =~ /\$${java.util.regex.Pattern.quote(word)}\b/)
+                if (m2.find()) {
+                    wordStart = m2.start() + 1 // skip '$'
+                    wordEnd = m2.end()
                 }
             }
+
             if (!word && position.character < lineText.length() && lineText.charAt(position.character) == '.') {
                 def leftMatcher = (lineText =~ /[A-Za-z_][A-Za-z0-9_]*/)
                 while (leftMatcher.find()) {

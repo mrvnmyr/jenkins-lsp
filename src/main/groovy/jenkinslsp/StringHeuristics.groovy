@@ -84,6 +84,26 @@ class StringHeuristics {
     }
 
     /**
+     * If cursor is inside a $var (no braces) within a GString, return the var name.
+     * Otherwise return null.
+     */
+    static String gstringVarAt(String line, int pos) {
+        if (line == null) return null
+        def m = (line =~ /\$[A-Za-z_][A-Za-z0-9_]*/)
+        while (m.find()) {
+            int start = m.start()
+            int end = m.end()
+            // variable part is after '$'
+            if (pos > start && pos <= end) {
+                String var = line.substring(start + 1, end)
+                Logging.debug("    DEBUG: gstringVarAt matched \$${var} at range ${start}-${end}, pos=${pos}")
+                return var
+            }
+        }
+        return null
+    }
+
+    /**
      * Attempts to heuristically extract method argument "types" from the call line text.
      * Returns a list of string kinds such as ["Map", "Closure"], ["String"], etc.
      *

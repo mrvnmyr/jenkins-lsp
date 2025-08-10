@@ -70,15 +70,23 @@ class AstNavigator {
     static Map findTopLevelVariableWithType(String word, List<String> lines) {
         if (!word) return null
         for (int i = 0; i < lines.size(); ++i) {
-            def m = (lines[i] =~ /\b(def|\w+)\s+${java.util.regex.Pattern.quote(word)}\b/)
+            String text = lines[i] ?: ""
+            // decl with type or 'def'
+            def m = (text =~ /\b(def|\w+)\s+${java.util.regex.Pattern.quote(word)}\b/)
             if (m.find()) {
                 int c = m.start() + m.group(0).lastIndexOf(word)
                 String type = "def"
-                String text = lines[i]
                 def typeMatch = (text =~ /\b(def|\w+)\s+${java.util.regex.Pattern.quote(word)}\b/)
                 if (typeMatch.find()) type = typeMatch.group(1)
                 Logging.log("Found top-level variable '${word}' at ${i}:${c} type: ${type}")
                 return [line: i, column: c, type: type, word: word]
+            }
+            // fallback: plain assignment without 'def' or type (script binding var)
+            def mAssign = (text =~ /\b${java.util.regex.Pattern.quote(word)}\b\s*=/)
+            if (mAssign.find()) {
+                int c = mAssign.start()
+                Logging.log("Found top-level assignment for '${word}' at ${i}:${c} (implicit type 'def')")
+                return [line: i, column: c, type: "def", word: word]
             }
         }
         return null
@@ -87,10 +95,18 @@ class AstNavigator {
     static Map findTopLevelVariable(String word, List<String> lines) {
         if (!word) return null
         for (int i = 0; i < lines.size(); ++i) {
-            def m = (lines[i] =~ /\b(def|\w+)\s+${java.util.regex.Pattern.quote(word)}\b/)
+            String text = lines[i] ?: ""
+            def m = (text =~ /\b(def|\w+)\s+${java.util.regex.Pattern.quote(word)}\b/)
             if (m.find()) {
                 int c = m.start() + m.group(0).lastIndexOf(word)
                 Logging.log("Found top-level variable '${word}' at ${i}:${c}")
+                return [line: i, column: c, word: word]
+            }
+            // fallback: detect simple assignment (no type/def)
+            def mAssign = (text =~ /\b${java.util.regex.Pattern.quote(word)}\b\s*=/)
+            if (mAssign.find()) {
+                int c = mAssign.start()
+                Logging.log("Found top-level variable by assignment '${word}' at ${i}:${c}")
                 return [line: i, column: c, word: word]
             }
         }
