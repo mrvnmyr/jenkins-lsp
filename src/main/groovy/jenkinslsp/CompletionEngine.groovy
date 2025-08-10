@@ -9,6 +9,7 @@ import org.codehaus.groovy.control.SourceUnit
  *   def f = new Foo()
  *   f.<CTRL+SPACE>    -> offers Foo methods/fields/properties
  *   this.<CTRL+SPACE> -> offers members of the enclosing class
+ *   Bar.<CTRL+SPACE>  -> treat 'Bar' (a class in this unit) as a qualifier
  */
 class CompletionEngine {
 
@@ -66,10 +67,20 @@ class CompletionEngine {
                     else type = topVar.type
                 }
             }
-            if (type) {
+            if (type && unit?.AST != null) {
                 for (ClassNode c in unit.AST.classes) {
                     if (c.nameWithoutPackage == type) { targetClass = c; break }
                 }
+            }
+        }
+
+        // Heuristic: if still unknown, treat the qualifier itself as a class name declared in this SourceUnit
+        if (targetClass == null && unit?.AST != null) {
+            for (ClassNode c in unit.AST.classes) {
+                if (c.nameWithoutPackage == qualifier) { targetClass = c; break }
+            }
+            if (targetClass != null) {
+                Logging.log("Completion: qualifier '${qualifier}' matched class name; using it for member suggestions.")
             }
         }
 
@@ -85,7 +96,7 @@ class CompletionEngine {
         // Accumulate members through the hierarchy
         def visited = new HashSet<String>()
         Closure<ClassNode> rebindToUnit = { ClassNode c ->
-            if (!c || !unit) return c
+            if (!c || !unit || unit.AST == null) return c
             def exact = unit.AST.classes.find { it.name == c.name }
             return exact ?: c
         }
@@ -96,6 +107,7 @@ class CompletionEngine {
             String key = cls?.name ?: "<null>"
             if (visited.contains(key)) break
             visited.add(key)
+            Logging.log("Completion: scanning class ${key} for members (prefix='${prefix}')")
 
             // Methods
             List<MethodNode> methods = []
@@ -111,7 +123,7 @@ class CompletionEngine {
             byName.each { String name, List<MethodNode> overloads ->
                 if (seenNames.add(name)) {
                     String sig = buildMethodDetail(overloads, cls)
-                    items << completionItem(name, 2 /*Method*/, sig, lineNum, replaceStartCol, replaceEndCol)
+                    items << completionItem(name + "()", 2 /*Method*/, sig, lineNum, replaceStartCol, replaceEndCol, name)
                 }
             }
 
@@ -124,7 +136,7 @@ class CompletionEngine {
                 if (!seenNames.contains(name) && (pfxLower == "" || name.toLowerCase().startsWith(pfxLower))) {
                     seenNames.add(name)
                     String detail = "${cls.nameWithoutPackage} property"
-                    items << completionItem(name, 10 /*Property*/, detail, lineNum, replaceStartCol, replaceEndCol)
+                    items << completionItem(name, 10 /*Property*/, detail, lineNum, replaceStartCol, replaceEndCol, name)
                 }
             }
 
@@ -137,28 +149,31 @@ class CompletionEngine {
                 if (!seenNames.contains(name) && (pfxLower == "" || name.toLowerCase().startsWith(pfxLower))) {
                     seenNames.add(name)
                     String detail = "${cls.nameWithoutPackage} field : ${(fn.type?.nameWithoutPackage) ?: 'def'}"
-                    items << completionItem(name, 5 /*Field*/, detail, lineNum, replaceStartCol, replaceEndCol)
+                    items << completionItem(name, 5 /*Field*/, detail, lineNum, replaceStartCol, replaceEndCol, name)
                 }
             }
 
             cls = cls.superClass
         }
 
+        Logging.log("Completion: built ${items.size()} items for qualifier '${qualifier}'")
         return items
     }
 
-    private static Map completionItem(String label, int kind, String detail, int line, int startCol, int endCol) {
+    private static Map completionItem(String label, int kind, String detail, int line, int startCol, int endCol, String insertText = null) {
+        def text = insertText ?: label
         return [
-            label   : label,
-            kind    : kind,
-            detail  : detail,
-            sortText: String.format("%02d_%s", kind, label),
-            textEdit: [
+            label     : label,
+            kind      : kind,
+            detail    : detail,
+            sortText  : String.format("%02d_%s", kind, label),
+            insertText: text,
+            textEdit  : [
                 range  : [
                     start: [ line: line, character: Math.max(0, startCol) ],
                     end  : [ line: line, character: Math.max(Math.max(0, startCol), endCol) ]
                 ],
-                newText: label
+                newText: text
             ]
         ]
     }

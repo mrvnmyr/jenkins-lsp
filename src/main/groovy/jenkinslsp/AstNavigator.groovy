@@ -99,6 +99,10 @@ class AstNavigator {
 
     static Map findTopLevelClassOrMethod(SourceUnit unit, String word, List<String> lines) {
         if (!word) return null
+        if (unit == null || unit.AST == null) {
+            Logging.log("findTopLevelClassOrMethod: unit or unit.AST is null; returning null for '${word}'")
+            return null
+        }
         for (ClassNode cls in unit.AST.classes) {
             if (cls.nameWithoutPackage == word) {
                 int l = cls.lineNumber > 0 ? cls.lineNumber - 1 : 0
@@ -131,6 +135,10 @@ class AstNavigator {
 
     // ----------------------------- Context lookup -----------------------------
     static ClassNode findClassForLine(SourceUnit unit, int line) {
+        if (unit == null || unit.AST == null) {
+            Logging.log("findClassForLine: unit or unit.AST is null (line=${line}); returning null")
+            return null
+        }
         ClassNode found = null
         for (ClassNode cls in unit.AST.classes) {
             if ((cls.lineNumber ?: 1) <= line && (cls.lastLineNumber ?: 1000000) >= line) {
@@ -149,6 +157,10 @@ class AstNavigator {
     }
 
     static MethodNode findTopLevelMethodForLine(SourceUnit unit, int line) {
+        if (unit == null || unit.AST == null) {
+            Logging.log("findTopLevelMethodForLine: unit or unit.AST is null (line=${line}); returning null")
+            return null
+        }
         for (MethodNode m in unit.AST.methods) {
             if ((m.lineNumber ?: 1) <= line && (m.lastLineNumber ?: 1000000) >= line) return m
         }
@@ -172,7 +184,7 @@ class AstNavigator {
 
         // Helper to map by exact FQN to the SourceUnit's actual class node (if present)
         Closure<ClassNode> rebindToUnit = { ClassNode c ->
-            if (!c || !unit) return c
+            if (!c || !unit || unit.AST == null) return c
             def exact = unit.AST.classes.find { it.name == c.name }
             return exact ?: c
         }
