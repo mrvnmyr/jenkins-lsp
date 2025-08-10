@@ -69,6 +69,7 @@ class AstNavigator {
     // ----------------------------- Top-level helpers -----------------------------
     static Map findTopLevelVariableWithType(String word, List<String> lines) {
         if (!word) return null
+        Map best = null
         for (int i = 0; i < lines.size(); ++i) {
             String text = lines[i] ?: ""
             // decl with type or 'def'
@@ -78,39 +79,54 @@ class AstNavigator {
                 String type = "def"
                 def typeMatch = (text =~ /\b(def|\w+)\s+${java.util.regex.Pattern.quote(word)}\b/)
                 if (typeMatch.find()) type = typeMatch.group(1)
-                Logging.log("Found top-level variable '${word}' at ${i}:${c} type: ${type}")
-                return [line: i, column: c, type: type, word: word]
+                best = [line: i, column: c, type: type, word: word]
+                Logging.log("Top-level typed/def decl candidate for '${word}': ${best}")
+                continue
             }
             // fallback: plain assignment without 'def' or type (script binding var)
             def mAssign = (text =~ /\b${java.util.regex.Pattern.quote(word)}\b\s*=/)
             if (mAssign.find()) {
                 int c = mAssign.start()
-                Logging.log("Found top-level assignment for '${word}' at ${i}:${c} (implicit type 'def')")
-                return [line: i, column: c, type: "def", word: word]
+                best = [line: i, column: c, type: "def", word: word]
+                Logging.log("Top-level assignment candidate for '${word}': ${best}")
+                continue
             }
         }
-        return null
+        if (best != null) {
+            Logging.log("Top-level '${word}' picked FINAL candidate (prefer last occurrence): ${best}")
+        } else {
+            Logging.log("Top-level '${word}' not found (with type or assignment).")
+        }
+        return best
     }
 
     static Map findTopLevelVariable(String word, List<String> lines) {
         if (!word) return null
+        Map best = null
         for (int i = 0; i < lines.size(); ++i) {
             String text = lines[i] ?: ""
             def m = (text =~ /\b(def|\w+)\s+${java.util.regex.Pattern.quote(word)}\b/)
             if (m.find()) {
                 int c = m.start() + m.group(0).lastIndexOf(word)
-                Logging.log("Found top-level variable '${word}' at ${i}:${c}")
-                return [line: i, column: c, word: word]
+                best = [line: i, column: c, word: word]
+                Logging.log("Top-level decl candidate for '${word}': ${best}")
+                continue
             }
             // fallback: detect simple assignment (no type/def)
             def mAssign = (text =~ /\b${java.util.regex.Pattern.quote(word)}\b\s*=/)
             if (mAssign.find()) {
                 int c = mAssign.start()
-                Logging.log("Found top-level variable by assignment '${word}' at ${i}:${c}")
-                return [line: i, column: c, word: word]
+                best = [line: i, column: c, word: word]
+                Logging.log("Top-level assignment candidate for '${word}': ${best}")
+                continue
             }
         }
-        return null
+        if (best != null) {
+            Logging.log("Top-level '${word}' picked FINAL candidate (prefer last occurrence): ${best}")
+        } else {
+            Logging.log("Top-level '${word}' not found.")
+        }
+        return best
     }
 
     static Map findTopLevelClassOrMethod(SourceUnit unit, String word, List<String> lines) {
