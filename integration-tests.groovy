@@ -370,4 +370,8 @@ LspTestClient.run(lspCmd, debug){ def client ->
     tuVarsGlobalVariable.assertGoto(from: "70:1", to: "57:5", test: "resolving 'def call(Map args=[:])'")
     // tuVarsGlobalVariable.assertGoto(from: "71:1", to: "49:5", test: "resolving 'def call(Map args=[:], String stageName, Closure cb)'")
     tuVarsGlobalVariable.assertNoDiagnostic()
+
+    def tuPipelinesJobDslBasic = client.loadTestUnit("./integration-tests/pipelines/job-dsl-basic.groovy") 
+    tuPipelinesJobDslBasic.assertGoto(from: "24:8", to: "70:1", test: "resolving global variable 'somedir'")
+    tuPipelinesJobDslBasic.assertGoto(from: "28:26", to: "70:1", test: "resolving global variable 'somedir' in a string literal without braces")
 }

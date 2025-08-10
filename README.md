@@ -16,6 +16,7 @@ e.g.:
 - [X] Add basic Parsing/Error Reporting
 - [X] Add basic GoTo
 - [X] Add basic autocompletion
+- [ ] Support Multiple Files
 - [ ] Add wrongReturnType and returnUnknownIdentifier Errors/Warnings
 - [ ] Find References
 - [ ] Jump to Stdlib internals
