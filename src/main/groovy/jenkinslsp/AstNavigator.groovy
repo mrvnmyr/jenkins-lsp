@@ -102,6 +102,33 @@ class AstNavigator {
         }
         if (best != null) {
             Logging.log("Top-level '${word}' picked FINAL candidate (prefer last occurrence): ${best}")
+            return best
+        }
+        // Fallback: if top-level-filtered scan found nothing, try *unfiltered* pass
+        if (unit != null) {
+            Logging.log("Top-level '${word}' not found with AST filter; attempting unfiltered fallback scan.")
+            for (int i = 0; i < lines.size(); ++i) {
+                String text = lines[i] ?: ""
+                def m = (text =~ /\b(def|\w+)\s+${java.util.regex.Pattern.quote(word)}\b/)
+                if (m.find()) {
+                    int c = m.start() + m.group(0).lastIndexOf(word)
+                    String type = "def"
+                    def typeMatch = (text =~ /\b(def|\w+)\s+${java.util.regex.Pattern.quote(word)}\b/)
+                    if (typeMatch.find()) type = typeMatch.group(1)
+                    best = [line: i, column: c, type: type, word: word]
+                    Logging.log("  [fallback] decl/def candidate for '${word}': ${best}")
+                    continue
+                }
+                def mAssign = (text =~ /\b${java.util.regex.Pattern.quote(word)}\b\s*=/)
+                if (mAssign.find()) {
+                    int c = mAssign.start()
+                    best = [line: i, column: c, type: "def", word: word]
+                    Logging.log("  [fallback] assignment candidate for '${word}': ${best}")
+                    continue
+                }
+            }
+            if (best != null) Logging.log("  [fallback] picked FINAL candidate: ${best}")
+            else Logging.log("  [fallback] still not found for '${word}'")
         } else {
             Logging.log("Top-level '${word}' not found (with type or assignment).")
         }
@@ -138,6 +165,30 @@ class AstNavigator {
         }
         if (best != null) {
             Logging.log("Top-level '${word}' picked FINAL candidate (prefer last occurrence): ${best}")
+            return best
+        }
+        // Fallback: unfiltered scan if AST-filter found nothing
+        if (unit != null) {
+            Logging.log("Top-level '${word}' not found with AST filter; attempting unfiltered fallback (no-type).")
+            for (int i = 0; i < lines.size(); ++i) {
+                String text = lines[i] ?: ""
+                def m = (text =~ /\b(def|\w+)\s+${java.util.regex.Pattern.quote(word)}\b/)
+                if (m.find()) {
+                    int c = m.start() + m.group(0).lastIndexOf(word)
+                    best = [line: i, column: c, word: word]
+                    Logging.log("  [fallback] decl candidate for '${word}': ${best}")
+                    continue
+                }
+                def mAssign = (text =~ /\b${java.util.regex.Pattern.quote(word)}\b\s*=/)
+                if (mAssign.find()) {
+                    int c = mAssign.start()
+                    best = [line: i, column: c, word: word]
+                    Logging.log("  [fallback] assignment candidate for '${word}': ${best}")
+                    continue
+                }
+            }
+            if (best != null) Logging.log("  [fallback] picked FINAL candidate: ${best}")
+            else Logging.log("  [fallback] still not found for '${word}'")
         } else {
             Logging.log("Top-level '${word}' not found.")
         }

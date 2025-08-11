@@ -38,7 +38,10 @@ class MemberResolver {
         if (!foundAtCursor) return null
 
         boolean isMethodCall = false
-        if (lineText.length() > foundEnd && lineText.charAt(foundEnd) == '(') isMethodCall = true
+        // consider whitespace between name and '('
+        int scan = Math.min(foundEnd, lineText.length())
+        while (scan < lineText.length() && Character.isWhitespace(lineText.charAt(scan))) scan++
+        if (scan < lineText.length() && lineText.charAt(scan) == '(') isMethodCall = true
         Logging.log("Detected qualified property/member lookup at cursor: ${varName}.${memberName} (isMethodCall: ${isMethodCall})")
 
         // Handle "this"
@@ -46,7 +49,9 @@ class MemberResolver {
             ClassNode classNode = AstNavigator.findClassForLine(unit, lineNum + 1)
             if (classNode) {
                 List callArgs = isMethodCall ? StringHeuristics.extractGroovyCallArgKinds(lineText, memberStart + memberName.length() - 1) : null
-                def res = AstNavigator.findFieldOrPropertyInHierarchy(classNode, memberName, lines, isMethodCall ? "preferMethod" : "preferField", callArgs, unit)
+                // use 'any' when not a call so we can still hit methods if user omitted parentheses
+                String mode = isMethodCall ? "preferMethod" : "any"
+                def res = AstNavigator.findFieldOrPropertyInHierarchy(classNode, memberName, lines, mode, callArgs, unit)
                 if (res) {
                     Logging.log("Resolved this.${memberName} to line ${res.line}, column ${res.column}")
                     return [found: true, matchAtCursor: true, debug: "this.${memberName}->${classNode.name}", line: res.line, column: res.column, word: memberName]
@@ -100,7 +105,9 @@ class MemberResolver {
             }
             if (classNode) {
                 List callArgs = isMethodCall ? StringHeuristics.extractGroovyCallArgKinds(lineText, memberStart + memberName.length() - 1) : null
-                def res = AstNavigator.findFieldOrPropertyInHierarchy(classNode, memberName, lines, isMethodCall ? "preferMethod" : "preferField", callArgs, unit)
+                // use 'any' when not a call so we can still return a method symbol
+                String mode = isMethodCall ? "preferMethod" : "any"
+                def res = AstNavigator.findFieldOrPropertyInHierarchy(classNode, memberName, lines, mode, callArgs, unit)
                 if (res) {
                     Logging.log("Resolved ${varName}.${memberName} to line ${res.line}, column ${res.column}")
                     return [found: true, matchAtCursor: true, debug: "${varName}.${memberName}->${type}", line: res.line, column: res.column, word: memberName]
