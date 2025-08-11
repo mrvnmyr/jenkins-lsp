@@ -354,7 +354,30 @@ class LspServer {
                 }
             }
 
-            // Prefer classes/methods over variables when both exist (e.g., class Foo vs var Foo)
+            // NEW: Prefer top-level variables over classes/methods when NOT a call.
+            if (!isUnqualifiedCall) {
+                Logging.log("Heuristic: prefer top-level variable for non-call identifier '${word}'")
+                def tlVarFirst = AstNavigator.findTopLevelVariable(word, lines, lastParsedUnit)
+                if (tlVarFirst) {
+                    Logging.log("Top-level variable chosen for '${word}' at ${tlVarFirst.line}:${tlVarFirst.column}")
+                    transport.sendMessage([
+                        jsonrpc: "2.0",
+                        id: message.id,
+                        result: [
+                            uri: message.params.textDocument.uri,
+                            range: [
+                                start: [line: tlVarFirst.line, character: tlVarFirst.column],
+                                end:   [line: tlVarFirst.line, character: tlVarFirst.column + word.length()]
+                            ]
+                        ]
+                    ])
+                    return
+                } else {
+                    Logging.log("No top-level variable found for '${word}' in variable-first branch.")
+                }
+            }
+
+            // Prefer classes/methods (when we didn't early-return with a var)
             def topRes = AstNavigator.findTopLevelClassOrMethod(lastParsedUnit, word, lines)
             if (topRes) {
                 Logging.log("Resolved '${word}' as top-level class/method at ${topRes.line}:${topRes.column}")
@@ -372,8 +395,10 @@ class LspServer {
                 return
             }
 
+            // Fallback: try top-level variable (e.g., if we ARE a call, or nothing else matched)
             def toplevelVar = AstNavigator.findTopLevelVariable(word, lines, lastParsedUnit)
             if (toplevelVar) {
+                Logging.log("Fallback top-level variable for '${word}' at ${toplevelVar.line}:${toplevelVar.column}")
                 transport.sendMessage([
                     jsonrpc: "2.0",
                     id: message.id,
