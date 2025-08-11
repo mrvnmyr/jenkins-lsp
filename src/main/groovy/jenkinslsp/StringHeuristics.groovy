@@ -200,7 +200,10 @@ class StringHeuristics {
                 else if (ch == '}') depth = Math.max(0, depth - 1)
             }
         }
-        Logging.debug("    DEBUG: computeBraceDepths => ${depths}")
+        // Keep logs lightweight to avoid blocking on stderr pipes
+        int n = depths.size()
+        def preview = depths.take(20)
+        Logging.debug("    DEBUG: computeBraceDepths size=${n}, preview=${preview}${n>20?'...':''}")
         return depths
     }
 }

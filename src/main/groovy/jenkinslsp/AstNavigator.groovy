@@ -78,11 +78,9 @@ class AstNavigator {
         def braceDepths = StringHeuristics.computeBraceDepths(lines)
         for (int i = 0; i < lines.size(); ++i) {
             if (unit && !isTopLevelLine(unit, i)) {
-                Logging.log("Skipping non top-level-by-AST line ${i} while searching '${word}'")
                 continue
             }
             if (braceDepths && braceDepths[i] != 0) {
-                Logging.log("Skipping line ${i} with braceDepth=${braceDepths[i]} while searching '${word}' (inside closure/brace scope)")
                 continue
             }
             String text = lines[i] ?: ""
@@ -151,11 +149,9 @@ class AstNavigator {
         def braceDepths = StringHeuristics.computeBraceDepths(lines)
         for (int i = 0; i < lines.size(); ++i) {
             if (unit && !isTopLevelLine(unit, i)) {
-                Logging.log("Skipping non top-level-by-AST line ${i} while searching '${word}' (no-type)")
                 continue
             }
             if (braceDepths && braceDepths[i] != 0) {
-                Logging.log("Skipping line ${i} with braceDepth=${braceDepths[i]} while searching '${word}' (no-type)")
                 continue
             }
             String text = lines[i] ?: ""
