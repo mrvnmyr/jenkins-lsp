@@ -71,16 +71,27 @@ class AstNavigator {
      * Find a *top-level* variable decl/assignment (optionally capturing its "type"/def).
      * Prefers the **last** top-level occurrence.
      *
-     * New strategy (more robust for Job DSL / script blocks):
-     *   1) Scan **bottom-up** and accept only lines with braceDepth==0 (true file top-level).
+     * Strategy (robust for Job DSL / script blocks):
+     *   1) Bottom-up scan accepting only lines with braceDepth==0 (true file top-level).
      *   2) If nothing found, bottom-up scan using AST top-level as a fallback.
      *   3) If still nothing, bottom-up scan accepting column==0 as a last resort.
+     *   4) Final safety net: bottom-up scan that accepts a valid decl/assignment **anywhere**.
      *
      * Detailed DEBUG logs show why a candidate was accepted or rejected.
      */
     static Map findTopLevelVariableWithType(String word, List<String> lines, SourceUnit unit = null) {
         if (!word) return null
         def braceDepths = StringHeuristics.computeBraceDepths(lines)
+
+        Closure<Boolean> validDeclEdge = { String text, int afterVarIdx ->
+            // Skip constructs like "something name(" or "something name {" which are not var decls
+            int j = afterVarIdx
+            while (j < (text?.length() ?: 0) && Character.isWhitespace(text.charAt(j))) j++
+            char next = (j < (text?.length() ?: 0)) ? text.charAt(j) : '\u0000'
+            boolean ok = !(next == '(' || next == '{')
+            Logging.debug("    DEBUG: validDeclEdge check afterVarIdx=${afterVarIdx} next='${next}' => ${ok}")
+            return ok
+        }
 
         Closure<Map> bottomUpScan = { Closure<Boolean> allow ->
             for (int i = lines.size() - 1; i >= 0; --i) {
@@ -93,8 +104,9 @@ class AstNavigator {
                     String type = "def"
                     def typeMatch = (text =~ /\b(def|\w+)\s+${java.util.regex.Pattern.quote(word)}\b/)
                     if (typeMatch.find()) type = typeMatch.group(1)
-                    boolean ok = allow(i, c)
-                    Logging.log("  [scan] decl/def '${word}' at ${i}:${c} type=${type} depth=${braceDepths ? braceDepths[i] : 'n/a'} allow=${ok}")
+                    boolean okEdge = validDeclEdge(text, m.end())
+                    boolean ok = allow(i, c) && okEdge
+                    Logging.log("  [scan] decl/def '${word}' at ${i}:${c} type=${type} depth=${braceDepths ? braceDepths[i] : 'n/a'} okEdge=${okEdge} allow=${ok}")
                     if (ok) return [line: i, column: c, type: type, word: word]
                 }
 
@@ -134,17 +146,34 @@ class AstNavigator {
             return res
         }
 
+        // Pass 4: final safety net — accept any valid decl/assignment anywhere (prefer last)
+        Logging.log("findTopLevelVariableWithType('${word}'): ANYWHERE bottom-up scan (safety net)")
+        res = bottomUpScan { int i, int c -> true }
+        if (res != null) {
+            Logging.log("Top-level '${word}' resolved by ANYWHERE safety-net: ${res}")
+            return res
+        }
+
         Logging.log("Top-level '${word}' not found by any pass.")
         return null
     }
 
     /**
      * Same as findTopLevelVariableWithType but without returning a type.
-     * Uses the same 3-pass bottom-up strategy.
+     * Uses the same 4-pass bottom-up strategy.
      */
     static Map findTopLevelVariable(String word, List<String> lines, SourceUnit unit = null) {
         if (!word) return null
         def braceDepths = StringHeuristics.computeBraceDepths(lines)
+
+        Closure<Boolean> validDeclEdge = { String text, int afterVarIdx ->
+            int j = afterVarIdx
+            while (j < (text?.length() ?: 0) && Character.isWhitespace(text.charAt(j))) j++
+            char next = (j < (text?.length() ?: 0)) ? text.charAt(j) : '\u0000'
+            boolean ok = !(next == '(' || next == '{')
+            Logging.debug("    DEBUG: validDeclEdge(no-type) check afterVarIdx=${afterVarIdx} next='${next}' => ${ok}")
+            return ok
+        }
 
         Closure<Map> bottomUpScan = { Closure<Boolean> allow ->
             for (int i = lines.size() - 1; i >= 0; --i) {
@@ -153,8 +182,9 @@ class AstNavigator {
                 def m = (text =~ /\b(def|\w+)\s+${java.util.regex.Pattern.quote(word)}\b/)
                 if (m.find()) {
                     int c = m.start() + m.group(0).lastIndexOf(word)
-                    boolean ok = allow(i, c)
-                    Logging.log("  [scan] decl '${word}' at ${i}:${c} depth=${braceDepths ? braceDepths[i] : 'n/a'} allow=${ok}")
+                    boolean okEdge = validDeclEdge(text, m.end())
+                    boolean ok = allow(i, c) && okEdge
+                    Logging.log("  [scan] decl '${word}' at ${i}:${c} depth=${braceDepths ? braceDepths[i] : 'n/a'} okEdge=${okEdge} allow=${ok}")
                     if (ok) return [line: i, column: c, word: word]
                 }
                 def mAssign = (text =~ /\b${java.util.regex.Pattern.quote(word)}\b\s*=/)
@@ -189,6 +219,14 @@ class AstNavigator {
         res = bottomUpScan { int i, int c -> c == 0 }
         if (res != null) {
             Logging.log("Top-level '${word}' (no-type) resolved by relaxed col==0 fallback: ${res}")
+            return res
+        }
+
+        // Pass 4: final safety net — accept any valid decl/assignment anywhere (prefer last)
+        Logging.log("findTopLevelVariable('${word}'): ANYWHERE bottom-up scan (safety net)")
+        res = bottomUpScan { int i, int c -> true }
+        if (res != null) {
+            Logging.log("Top-level '${word}' (no-type) resolved by ANYWHERE safety-net: ${res}")
             return res
         }
 
