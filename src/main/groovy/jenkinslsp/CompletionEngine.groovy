@@ -59,7 +59,7 @@ class CompletionEngine {
             }
             if (!type) {
                 // top-level variable
-                def topVar = AstNavigator.findTopLevelVariableWithType(qualifier, lines)
+                def topVar = AstNavigator.findTopLevelVariableWithType(qualifier, lines, unit)
                 if (topVar) {
                     String decl = lines[topVar.line] ?: ""
                     def assignMatch = (decl =~ /${java.util.regex.Pattern.quote(qualifier)}\s*=\s*new\s+(\w+)/)

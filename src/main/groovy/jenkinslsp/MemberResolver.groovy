@@ -79,7 +79,7 @@ class MemberResolver {
 
         // Top-level variable type inference if not a local
         if (!type) {
-            def topVar = AstNavigator.findTopLevelVariableWithType(varName, lines)
+            def topVar = AstNavigator.findTopLevelVariableWithType(varName, lines, unit)
             if (topVar) {
                 def assignLine = lines[topVar.line]
                 def assignMatch = assignLine =~ /${java.util.regex.Pattern.quote(varName)}\s*=\s*new\s+(\w+)/

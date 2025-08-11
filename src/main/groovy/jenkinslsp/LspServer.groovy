@@ -354,7 +354,25 @@ class LspServer {
                 }
             }
 
-            def toplevelVar = AstNavigator.findTopLevelVariable(word, lines)
+            // Prefer classes/methods over variables when both exist (e.g., class Foo vs var Foo)
+            def topRes = AstNavigator.findTopLevelClassOrMethod(lastParsedUnit, word, lines)
+            if (topRes) {
+                Logging.log("Resolved '${word}' as top-level class/method at ${topRes.line}:${topRes.column}")
+                transport.sendMessage([
+                    jsonrpc: "2.0",
+                    id: message.id,
+                    result: [
+                        uri: message.params.textDocument.uri,
+                        range: [
+                            start: [line: topRes.line, character: topRes.column],
+                            end:   [line: topRes.line, character: topRes.column + word.length()]
+                        ]
+                    ]
+                ])
+                return
+            }
+
+            def toplevelVar = AstNavigator.findTopLevelVariable(word, lines, lastParsedUnit)
             if (toplevelVar) {
                 transport.sendMessage([
                     jsonrpc: "2.0",
@@ -364,22 +382,6 @@ class LspServer {
                         range: [
                             start: [line: toplevelVar.line, character: toplevelVar.column],
                             end:   [line: toplevelVar.line, character: toplevelVar.column + word.length()]
-                        ]
-                    ]
-                ])
-                return
-            }
-
-            def topRes = AstNavigator.findTopLevelClassOrMethod(lastParsedUnit, word, lines)
-            if (topRes) {
-                transport.sendMessage([
-                    jsonrpc: "2.0",
-                    id: message.id,
-                    result: [
-                        uri: message.params.textDocument.uri,
-                        range: [
-                            start: [line: topRes.line, character: topRes.column],
-                            end:   [line: topRes.line, character: topRes.column + word.length()]
                         ]
                     ]
                 ])

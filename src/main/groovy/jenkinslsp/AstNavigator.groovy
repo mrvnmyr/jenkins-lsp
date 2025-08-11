@@ -67,10 +67,18 @@ class AstNavigator {
     }
 
     // ----------------------------- Top-level helpers -----------------------------
-    static Map findTopLevelVariableWithType(String word, List<String> lines) {
+    /**
+     * Find a *top-level* variable decl/assignment (optionally capturing its "type"/def).
+     * Prefers the **last** top-level occurrence and ignores lines inside classes or methods.
+     */
+    static Map findTopLevelVariableWithType(String word, List<String> lines, SourceUnit unit = null) {
         if (!word) return null
         Map best = null
         for (int i = 0; i < lines.size(); ++i) {
+            if (unit && !isTopLevelLine(unit, i)) {
+                Logging.log("Skipping non top-level line ${i} while searching '${word}'")
+                continue
+            }
             String text = lines[i] ?: ""
             // decl with type or 'def'
             def m = (text =~ /\b(def|\w+)\s+${java.util.regex.Pattern.quote(word)}\b/)
@@ -100,10 +108,17 @@ class AstNavigator {
         return best
     }
 
-    static Map findTopLevelVariable(String word, List<String> lines) {
+    /**
+     * Same as findTopLevelVariableWithType but without returning a type.
+     */
+    static Map findTopLevelVariable(String word, List<String> lines, SourceUnit unit = null) {
         if (!word) return null
         Map best = null
         for (int i = 0; i < lines.size(); ++i) {
+            if (unit && !isTopLevelLine(unit, i)) {
+                Logging.log("Skipping non top-level line ${i} while searching '${word}' (no-type)")
+                continue
+            }
             String text = lines[i] ?: ""
             def m = (text =~ /\b(def|\w+)\s+${java.util.regex.Pattern.quote(word)}\b/)
             if (m.find()) {
@@ -317,5 +332,31 @@ class AstNavigator {
         }
         Logging.log("Property/Field/Method '${name}' not found in hierarchy for starting class ${orig?.name}")
         return null
+    }
+
+    /**
+     * Helper: a line index is "top-level" if it's not inside any class or method in the unit.
+     */
+    private static boolean isTopLevelLine(SourceUnit unit, int zeroBasedLineIndex) {
+        if (unit == null || unit.AST == null) return true
+        int line = zeroBasedLineIndex + 1 // AST uses 1-based
+        // inside any class?
+        for (ClassNode cls in unit.AST.classes) {
+            int s = (cls.lineNumber ?: Integer.MAX_VALUE)
+            int e = (cls.lastLineNumber ?: Integer.MIN_VALUE)
+            if (s <= line && line <= e) return false
+            for (MethodNode m in cls.methods) {
+                int ms = (m.lineNumber ?: Integer.MAX_VALUE)
+                int me = (m.lastLineNumber ?: Integer.MIN_VALUE)
+                if (ms <= line && line <= me) return false
+            }
+        }
+        // inside any top-level method?
+        for (MethodNode m in unit.AST.methods) {
+            int ms = (m.lineNumber ?: Integer.MAX_VALUE)
+            int me = (m.lastLineNumber ?: Integer.MIN_VALUE)
+            if (ms <= line && line <= me) return false
+        }
+        return true
     }
 }
