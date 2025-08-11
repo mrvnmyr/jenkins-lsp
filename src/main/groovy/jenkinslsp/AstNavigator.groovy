@@ -71,160 +71,129 @@ class AstNavigator {
      * Find a *top-level* variable decl/assignment (optionally capturing its "type"/def).
      * Prefers the **last** top-level occurrence.
      *
-     * A line is treated as "top-level" if any of the following holds:
-     *  - AST says it's not inside a class/method (for non-script files)
-     *  - the brace depth at the start of the line is 0
-     *  - the matched identifier starts at column 0 (defensive fallback for odd brace parsing)
+     * New strategy (more robust for Job DSL / script blocks):
+     *   1) Scan **bottom-up** and accept only lines with braceDepth==0 (true file top-level).
+     *   2) If nothing found, bottom-up scan using AST top-level as a fallback.
+     *   3) If still nothing, bottom-up scan accepting column==0 as a last resort.
+     *
+     * Detailed DEBUG logs show why a candidate was accepted or rejected.
      */
     static Map findTopLevelVariableWithType(String word, List<String> lines, SourceUnit unit = null) {
         if (!word) return null
-        Map best = null
         def braceDepths = StringHeuristics.computeBraceDepths(lines)
-        for (int i = 0; i < lines.size(); ++i) {
-            boolean topByAst = (unit == null) ? true : isTopLevelLine(unit, i)
-            boolean topByBraces = (braceDepths == null) ? true : (braceDepths[i] == 0)
-            String text = lines[i] ?: ""
 
-            // decl with type or 'def'
-            def m = (text =~ /\b(def|\w+)\s+${java.util.regex.Pattern.quote(word)}\b/)
-            if (m.find()) {
-                int c = m.start() + m.group(0).lastIndexOf(word)
-                String type = "def"
-                def typeMatch = (text =~ /\b(def|\w+)\s+${java.util.regex.Pattern.quote(word)}\b/)
-                if (typeMatch.find()) type = typeMatch.group(1)
-                boolean allow = topByAst || topByBraces || (c == 0)
-                Logging.log("Top-level typed/def decl candidate for '${word}' at line ${i}, col ${c} (topByAst=${topByAst}, depth=${braceDepths ? braceDepths[i] : 'n/a'}, allow=${allow}, type=${type})")
-                if (allow) {
-                    best = [line: i, column: c, type: type, word: word]
-                    continue
-                }
-            }
-
-            // fallback: plain assignment without 'def' or type (script binding var)
-            def mAssign = (text =~ /\b${java.util.regex.Pattern.quote(word)}\b\s*=/)
-            if (mAssign.find()) {
-                int c = mAssign.start()
-                boolean allow = topByAst || topByBraces || (c == 0)
-                Logging.log("Top-level assignment candidate for '${word}' at line ${i}, col ${c} (topByAst=${topByAst}, depth=${braceDepths ? braceDepths[i] : 'n/a'}, allow=${allow})")
-                if (allow) {
-                    best = [line: i, column: c, type: "def", word: word]
-                    continue
-                }
-            }
-        }
-        if (best != null) {
-            Logging.log("Top-level '${word}' picked FINAL candidate (prefer last occurrence): ${best}")
-            return best
-        }
-
-        // Fallback: if filtered scan found nothing, try a second pass that only
-        // requires column==0 OR braceDepth==0 (still prefers last).
-        if (unit != null) {
-            Logging.log("Top-level '${word}' not found with primary pass; attempting relaxed fallback (braceDepth==0 OR col==0).")
-            for (int i = 0; i < lines.size(); ++i) {
+        Closure<Map> bottomUpScan = { Closure<Boolean> allow ->
+            for (int i = lines.size() - 1; i >= 0; --i) {
                 String text = lines[i] ?: ""
+
+                // decl with type or 'def'
                 def m = (text =~ /\b(def|\w+)\s+${java.util.regex.Pattern.quote(word)}\b/)
                 if (m.find()) {
                     int c = m.start() + m.group(0).lastIndexOf(word)
                     String type = "def"
                     def typeMatch = (text =~ /\b(def|\w+)\s+${java.util.regex.Pattern.quote(word)}\b/)
                     if (typeMatch.find()) type = typeMatch.group(1)
-                    boolean allow = (!braceDepths || braceDepths[i] == 0) || (c == 0)
-                    if (allow) {
-                        best = [line: i, column: c, type: type, word: word]
-                        Logging.log("  [fallback] decl/def candidate for '${word}' at ${i} (depth=${braceDepths ? braceDepths[i] : 'n/a'}, col=${c})")
-                        continue
-                    }
+                    boolean ok = allow(i, c)
+                    Logging.log("  [scan] decl/def '${word}' at ${i}:${c} type=${type} depth=${braceDepths ? braceDepths[i] : 'n/a'} allow=${ok}")
+                    if (ok) return [line: i, column: c, type: type, word: word]
                 }
+
+                // plain assignment without 'def' or type (script binding var)
                 def mAssign = (text =~ /\b${java.util.regex.Pattern.quote(word)}\b\s*=/)
                 if (mAssign.find()) {
                     int c = mAssign.start()
-                    boolean allow = (!braceDepths || braceDepths[i] == 0) || (c == 0)
-                    if (allow) {
-                        best = [line: i, column: c, type: "def", word: word]
-                        Logging.log("  [fallback] assignment candidate for '${word}' at ${i} (depth=${braceDepths ? braceDepths[i] : 'n/a'}, col=${c})")
-                        continue
-                    }
+                    boolean ok = allow(i, c)
+                    Logging.log("  [scan] assign '${word}' at ${i}:${c} depth=${braceDepths ? braceDepths[i] : 'n/a'} allow=${ok}")
+                    if (ok) return [line: i, column: c, type: "def", word: word]
                 }
             }
-            if (best != null) Logging.log("  [fallback] picked FINAL candidate: ${best}")
-            else Logging.log("  [fallback] still not found for '${word}'")
-        } else {
-            Logging.log("Top-level '${word}' not found (with type or assignment).")
+            return null
         }
-        return best
+
+        // Pass 1: strict true top-level (brace depth == 0)
+        Logging.log("findTopLevelVariableWithType('${word}'): strict depth==0 bottom-up scan")
+        def res = bottomUpScan { int i, int c -> braceDepths && braceDepths[i] == 0 }
+        if (res != null) {
+            Logging.log("Top-level '${word}' resolved by strict depth==0: ${res}")
+            return res
+        }
+
+        // Pass 2: AST-based top-level (in case depth parsing is confused by exotic strings)
+        Logging.log("findTopLevelVariableWithType('${word}'): AST-top-level bottom-up scan (fallback)")
+        res = bottomUpScan { int i, int c -> unit ? isTopLevelLine(unit, i) : true }
+        if (res != null) {
+            Logging.log("Top-level '${word}' resolved by AST-top-level fallback: ${res}")
+            return res
+        }
+
+        // Pass 3: relaxed last resort (column==0)
+        Logging.log("findTopLevelVariableWithType('${word}'): relaxed col==0 bottom-up scan (last resort)")
+        res = bottomUpScan { int i, int c -> c == 0 }
+        if (res != null) {
+            Logging.log("Top-level '${word}' resolved by relaxed col==0 fallback: ${res}")
+            return res
+        }
+
+        Logging.log("Top-level '${word}' not found by any pass.")
+        return null
     }
 
     /**
      * Same as findTopLevelVariableWithType but without returning a type.
+     * Uses the same 3-pass bottom-up strategy.
      */
     static Map findTopLevelVariable(String word, List<String> lines, SourceUnit unit = null) {
         if (!word) return null
-        Map best = null
         def braceDepths = StringHeuristics.computeBraceDepths(lines)
-        for (int i = 0; i < lines.size(); ++i) {
-            boolean topByAst = (unit == null) ? true : isTopLevelLine(unit, i)
-            boolean topByBraces = (braceDepths == null) ? true : (braceDepths[i] == 0)
-            String text = lines[i] ?: ""
 
-            def m = (text =~ /\b(def|\w+)\s+${java.util.regex.Pattern.quote(word)}\b/)
-            if (m.find()) {
-                int c = m.start() + m.group(0).lastIndexOf(word)
-                boolean allow = topByAst || topByBraces || (c == 0)
-                Logging.log("Top-level decl candidate for '${word}' at line ${i}, col ${c} (topByAst=${topByAst}, depth=${braceDepths ? braceDepths[i] : 'n/a'}, allow=${allow})")
-                if (allow) {
-                    best = [line: i, column: c, word: word]
-                    continue
-                }
-            }
-            // fallback: detect simple assignment (no type/def)
-            def mAssign = (text =~ /\b${java.util.regex.Pattern.quote(word)}\b\s*=/)
-            if (mAssign.find()) {
-                int c = mAssign.start()
-                boolean allow = topByAst || topByBraces || (c == 0)
-                Logging.log("Top-level assignment candidate for '${word}' at line ${i}, col ${c} (topByAst=${topByAst}, depth=${braceDepths ? braceDepths[i] : 'n/a'}, allow=${allow})")
-                if (allow) {
-                    best = [line: i, column: c, word: word]
-                    continue
-                }
-            }
-        }
-        if (best != null) {
-            Logging.log("Top-level '${word}' picked FINAL candidate (prefer last occurrence): ${best}")
-            return best
-        }
-        // Fallback: relaxed pass honoring braceDepth==0 OR col==0 (still prefer last)
-        if (unit != null) {
-            Logging.log("Top-level '${word}' not found with AST/brace filters; attempting relaxed fallback (no-type, depth==0 OR col==0).")
-            for (int i = 0; i < lines.size(); ++i) {
+        Closure<Map> bottomUpScan = { Closure<Boolean> allow ->
+            for (int i = lines.size() - 1; i >= 0; --i) {
                 String text = lines[i] ?: ""
+
                 def m = (text =~ /\b(def|\w+)\s+${java.util.regex.Pattern.quote(word)}\b/)
                 if (m.find()) {
                     int c = m.start() + m.group(0).lastIndexOf(word)
-                    boolean allow = (!braceDepths || braceDepths[i] == 0) || (c == 0)
-                    if (allow) {
-                        best = [line: i, column: c, word: word]
-                        Logging.log("  [fallback] decl candidate for '${word}' at ${i} (depth=${braceDepths ? braceDepths[i] : 'n/a'}, col=${c})")
-                        continue
-                    }
+                    boolean ok = allow(i, c)
+                    Logging.log("  [scan] decl '${word}' at ${i}:${c} depth=${braceDepths ? braceDepths[i] : 'n/a'} allow=${ok}")
+                    if (ok) return [line: i, column: c, word: word]
                 }
                 def mAssign = (text =~ /\b${java.util.regex.Pattern.quote(word)}\b\s*=/)
                 if (mAssign.find()) {
                     int c = mAssign.start()
-                    boolean allow = (!braceDepths || braceDepths[i] == 0) || (c == 0)
-                    if (allow) {
-                        best = [line: i, column: c, word: word]
-                        Logging.log("  [fallback] assignment candidate for '${word}' at ${i} (depth=${braceDepths ? braceDepths[i] : 'n/a'}, col=${c})")
-                        continue
-                    }
+                    boolean ok = allow(i, c)
+                    Logging.log("  [scan] assign '${word}' at ${i}:${c} depth=${braceDepths ? braceDepths[i] : 'n/a'} allow=${ok}")
+                    if (ok) return [line: i, column: c, word: word]
                 }
             }
-            if (best != null) Logging.log("  [fallback] picked FINAL candidate: ${best}")
-            else Logging.log("  [fallback] still not found for '${word}'")
-        } else {
-            Logging.log("Top-level '${word}' not found.")
+            return null
         }
-        return best
+
+        // Pass 1: strict true top-level (brace depth == 0)
+        Logging.log("findTopLevelVariable('${word}'): strict depth==0 bottom-up scan")
+        def res = bottomUpScan { int i, int c -> braceDepths && braceDepths[i] == 0 }
+        if (res != null) {
+            Logging.log("Top-level '${word}' (no-type) resolved by strict depth==0: ${res}")
+            return res
+        }
+
+        // Pass 2: AST-based top-level
+        Logging.log("findTopLevelVariable('${word}'): AST-top-level bottom-up scan (fallback)")
+        res = bottomUpScan { int i, int c -> unit ? isTopLevelLine(unit, i) : true }
+        if (res != null) {
+            Logging.log("Top-level '${word}' (no-type) resolved by AST-top-level fallback: ${res}")
+            return res
+        }
+
+        // Pass 3: relaxed (column==0)
+        Logging.log("findTopLevelVariable('${word}'): relaxed col==0 bottom-up scan (last resort)")
+        res = bottomUpScan { int i, int c -> c == 0 }
+        if (res != null) {
+            Logging.log("Top-level '${word}' (no-type) resolved by relaxed col==0 fallback: ${res}")
+            return res
+        }
+
+        Logging.log("Top-level '${word}' (no-type) not found by any pass.")
+        return null
     }
 
     static Map findTopLevelClassOrMethod(SourceUnit unit, String word, List<String> lines) {
