@@ -203,7 +203,7 @@ class LspServer {
                     }
                 }
             } else {
-                // best-effort to set bounds for downstream unqualified-call check
+                // best-effort to set bounds for downstream unqualified-call/type checks
                 def m2 = (lineText =~ /\$${java.util.regex.Pattern.quote(word)}\b/)
                 if (m2.find()) {
                     wordStart = m2.start() + 1 // skip '$'
@@ -297,18 +297,37 @@ class LspServer {
                 Logging.log("Variable/parameter '${word}' NOT found in locals for method: " + (contextMethod ? "${contextMethod.name} [${contextMethod.lineNumber}-${contextMethod.lastLineNumber}]" : "<none>"))
             }
 
+            // Compute generic prev/next tokens for context-sensitive decisions
+            String prevWordGeneric = null
+            char prevNonSpaceChar = '\u0000'
+            if (wordStart > 0) {
+                int i = wordStart - 1
+                while (i >= 0 && Character.isWhitespace(lineText.charAt(i))) i--
+                if (i >= 0) {
+                    prevNonSpaceChar = lineText.charAt(i)
+                    int end = i
+                    while (i >= 0 && Character.isJavaIdentifierPart(lineText.charAt(i))) i--
+                    if (end >= 0 && i < end) {
+                        prevWordGeneric = lineText.substring(i + 1, end + 1)
+                    }
+                }
+            }
+            int k = Math.max(0, wordEnd)
+            while (k < lineText.length() && Character.isWhitespace(lineText.charAt(k))) k++
+            char nextNonSpaceChar = (k < lineText.length()) ? lineText.charAt(k) : '\u0000'
+
             // If looks like an unqualified method call at this cursor, try overload resolution on the enclosing class (e.g., Script)
             boolean nextCharIsParen = (wordEnd >= 0 && wordEnd < (lineText?.length() ?: 0) && lineText.charAt(wordEnd) == '(')
             // Guard: don't treat "new Foo(" (constructor) as an unqualified method call
             boolean precededByNew = false
-            if (nextCharIsParen && wordStart > 0) {
+            if (wordStart > 0) {
                 int i = wordStart - 1
                 while (i >= 0 && Character.isWhitespace(lineText.charAt(i))) i--
                 int end = i
                 while (i >= 0 && Character.isJavaIdentifierPart(lineText.charAt(i))) i--
-                String prevWord = (end >= 0 && i < end) ? lineText.substring(i + 1, end + 1) : ""
-                precededByNew = "new".equals(prevWord)
-                Logging.log("Unqualified-call check: prevWord='${prevWord}', precededByNew=${precededByNew}, nextCharIsParen=${nextCharIsParen}")
+                String prevWordCalc = (end >= 0 && i < end) ? lineText.substring(i + 1, end + 1) : ""
+                precededByNew = "new".equals(prevWordCalc)
+                Logging.log("Unqualified-call/type check: prevWord='${prevWordCalc}', precededByNew=${precededByNew}, nextCharIsParen=${nextCharIsParen}")
             }
             boolean isUnqualifiedCall = nextCharIsParen && !precededByNew
 
@@ -354,8 +373,28 @@ class LspServer {
                 }
             }
 
-            // NEW: Prefer top-level variables over classes/methods when NOT a call.
-            if (!isUnqualifiedCall) {
+            // Decide whether this identifier is likely a TYPE reference.
+            boolean classExists = false
+            try {
+                for (cls in lastParsedUnit?.AST?.classes ?: []) {
+                    if (cls?.nameWithoutPackage == word) { classExists = true; break }
+                }
+            } catch (Throwable t) {
+                // ignore
+            }
+            boolean looksLikeTypeContext =
+                    precededByNew ||
+                    "as".equals(prevWordGeneric) ||
+                    "extends".equals(prevWordGeneric) ||
+                    "implements".equals(prevWordGeneric) ||
+                    prevNonSpaceChar == '(' ||   // cast like (Foo) x
+                    nextNonSpaceChar == '.' ||   // static access Foo.SOMETHING
+                    (classExists && Character.isUpperCase(word.charAt(0)))
+
+            Logging.log("Context decision for '${word}': looksLikeTypeContext=${looksLikeTypeContext}, classExists=${classExists}, prevWord=${prevWordGeneric}, prevChar='${prevNonSpaceChar}', nextChar='${nextNonSpaceChar}'")
+
+            // Prefer top-level variables for non-call identifiers ONLY when we are not in a type-ish context.
+            if (!isUnqualifiedCall && !looksLikeTypeContext) {
                 Logging.log("Heuristic: prefer top-level variable for non-call identifier '${word}'")
                 def tlVarFirst = AstNavigator.findTopLevelVariable(word, lines, lastParsedUnit)
                 if (tlVarFirst) {
