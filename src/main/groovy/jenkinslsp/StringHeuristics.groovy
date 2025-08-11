@@ -193,30 +193,30 @@ class StringHeuristics {
 
                 // --- inside multi-line comment ---
                 if (inBlockComment) {
-                    if (ch == '*' && n1 == '/') { inBlockComment = false; j++; }
+                    if (ch == '*' && n1 == '/') { inBlockComment = false; j++; Logging.debug("    DEBUG: end /* */ at ${i}:${j}") }
                     continue
                 }
 
                 // --- inside dollar-slashy ---
                 if (inDollarSlashy) {
-                    if (ch == '/' && n1 == '\$') { inDollarSlashy = false; j++; }
+                    if (ch == '/' && n1 == '\$') { inDollarSlashy = false; j++; Logging.debug("    DEBUG: end $/ /$ at ${i}:${j}") }
                     continue
                 }
 
                 // --- inside slashy ---
                 if (inSlashy) {
-                    if (!escape && ch == '/') { inSlashy = false; continue }
+                    if (!escape && ch == '/') { inSlashy = false; Logging.debug("    DEBUG: end /.../ at ${i}:${j}"); continue }
                     escape = (!escape && ch == '\\')
                     continue
                 }
 
                 // --- inside triple quotes ---
                 if (inTqDq) {
-                    if (ch == '"' && n1 == '"' && n2 == '"') { inTqDq = false; j += 2 }
+                    if (ch == '"' && n1 == '"' && n2 == '"') { inTqDq = false; j += 2; Logging.debug("    DEBUG: end \"\"\" at ${i}:${j}") }
                     continue
                 }
                 if (inTqSq) {
-                    if (ch == '\'' && n1 == '\'' && n2 == '\'') { inTqSq = false; j += 2 }
+                    if (ch == '\'' && n1 == '\'' && n2 == '\'') { inTqSq = false; j += 2; Logging.debug("    DEBUG: end ''' at ${i}:${j}") }
                     continue
                 }
 
@@ -236,14 +236,32 @@ class StringHeuristics {
                 // line comment
                 if (ch == '/' && n1 == '/') break
                 // block comment
-                if (ch == '/' && n1 == '*') { inBlockComment = true; j++; continue }
+                if (ch == '/' && n1 == '*') { inBlockComment = true; j++; Logging.debug("    DEBUG: start /* at ${i}:${j-1}"); continue }
                 // dollar-slashy start
-                if (ch == '\$' && n1 == '/') { inDollarSlashy = true; j++; continue }
+                if (ch == '\$' && n1 == '/') { inDollarSlashy = true; j++; Logging.debug("    DEBUG: start $/ at ${i}:${j-1}"); continue }
                 // triple quotes
-                if (ch == '"' && n1 == '"' && n2 == '"') { inTqDq = true; j += 2; continue }
-                if (ch == '\'' && n1 == '\'' && n2 == '\'') { inTqSq = true; j += 2; continue }
-                // slashy start (best-effort; may mis-detect division but acceptable here)
-                if (ch == '/' && n1 != '/' && n1 != '*') { inSlashy = true; continue }
+                if (ch == '"' && n1 == '"' && n2 == '"') { inTqDq = true; j += 2; Logging.debug("    DEBUG: start \"\"\" at ${i}:${j-2}"); continue }
+                if (ch == '\'' && n1 == '\'' && n2 == '\'') { inTqSq = true; j += 2; Logging.debug("    DEBUG: start ''' at ${i}:${j-2}"); continue }
+                // slashy start (improved heuristic: avoid division like a/b)
+                if (ch == '/' && n1 != '/' && n1 != '*') {
+                    // look behind for a token that typically ends an expression
+                    int p = j - 1
+                    while (p >= 0 && Character.isWhitespace(line.charAt(p))) p--
+                    boolean looksLikeDivision = false
+                    if (p >= 0) {
+                        char prev = line.charAt(p)
+                        if (Character.isLetterOrDigit(prev) || prev == '_' || prev == ')' || prev == ']' || prev == '"' || prev == '\'' || prev == '}') {
+                            looksLikeDivision = true
+                        }
+                    }
+                    if (!looksLikeDivision) {
+                        inSlashy = true
+                        Logging.debug("    DEBUG: start /.../ at ${i}:${j}")
+                        continue
+                    } else {
+                        Logging.debug("    DEBUG: '/' treated as division at ${i}:${j}")
+                    }
+                }
                 // normal quotes
                 if (ch == '"') { inDq = true; escape = false; continue }
                 if (ch == '\'') { inSq = true; escape = false; continue }
@@ -255,8 +273,12 @@ class StringHeuristics {
         }
         // Keep logs lightweight to avoid blocking on stderr pipes
         int n = depths.size()
-        def preview = depths.take(20)
-        Logging.debug("    DEBUG: computeBraceDepths size=${n}, preview=${preview}${n>20?'...':''}")
+        def head = depths.take(20)
+        Logging.debug("    DEBUG: computeBraceDepths size=${n}, head=${head}${n>20?'...':''}")
+        if (n > 20) {
+            def tail = depths.subList(Math.max(0, n - 10), n)
+            Logging.debug("    DEBUG: computeBraceDepths tail=${tail}")
+        }
         return depths
     }
 }
