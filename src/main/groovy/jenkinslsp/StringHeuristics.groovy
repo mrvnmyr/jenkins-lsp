@@ -199,7 +199,7 @@ class StringHeuristics {
 
                 // --- inside dollar-slashy ---
                 if (inDollarSlashy) {
-                    if (ch == '/' && n1 == '\$') { inDollarSlashy = false; j++; Logging.debug("    DEBUG: end $/ /$ at ${i}:${j}") }
+                    if (ch == '/' && n1 == '\$') { inDollarSlashy = false; j++; Logging.debug("    DEBUG: end \$/ /\$ at ${i}:${j}") }
                     continue
                 }
 
@@ -238,7 +238,7 @@ class StringHeuristics {
                 // block comment
                 if (ch == '/' && n1 == '*') { inBlockComment = true; j++; Logging.debug("    DEBUG: start /* at ${i}:${j-1}"); continue }
                 // dollar-slashy start
-                if (ch == '\$' && n1 == '/') { inDollarSlashy = true; j++; Logging.debug("    DEBUG: start $/ at ${i}:${j-1}"); continue }
+                if (ch == '\$' && n1 == '/') { inDollarSlashy = true; j++; Logging.debug("    DEBUG: start \$/ at ${i}:${j-1}"); continue }
                 // triple quotes
                 if (ch == '"' && n1 == '"' && n2 == '"') { inTqDq = true; j += 2; Logging.debug("    DEBUG: start \"\"\" at ${i}:${j-2}"); continue }
                 if (ch == '\'' && n1 == '\'' && n2 == '\'') { inTqSq = true; j += 2; Logging.debug("    DEBUG: start ''' at ${i}:${j-2}"); continue }
