@@ -86,6 +86,8 @@ class StringHeuristics {
     /**
      * If cursor is inside a $var (no braces) within a GString, return the var name.
      * Otherwise return null.
+     *
+     * NOTE: Treat the '$' itself as a valid hit location to be more forgiving.
      */
     static String gstringVarAt(String line, int pos) {
         if (line == null) return null
@@ -93,8 +95,8 @@ class StringHeuristics {
         while (m.find()) {
             int start = m.start()
             int end = m.end()
-            // variable part is after '$'
-            if (pos > start && pos <= end) {
+            // accept when cursor is on the '$' or anywhere within the identifier
+            if (pos >= start && pos <= end) {
                 String var = line.substring(start + 1, end)
                 Logging.debug("    DEBUG: gstringVarAt matched \$${var} at range ${start}-${end}, pos=${pos}")
                 return var
@@ -158,5 +160,47 @@ class StringHeuristics {
 
         Logging.debug("    DEBUG: extractGroovyCallArgKinds => ${argKinds} from line='${line}', idx=${callNameLastColumnIndex}")
         return argKinds
+    }
+
+    /**
+     * Compute the curly-brace depth at the *start* of each line, ignoring braces
+     * inside string literals and single-line comments. Useful to detect lines that
+     * are physically at the top-level of a script (depth == 0), even inside DSLs.
+     */
+    static List<Integer> computeBraceDepths(List<String> lines) {
+        def depths = []
+        int depth = 0
+        boolean inDq = false
+        boolean inSq = false
+        boolean escape = false
+
+        for (int i = 0; i < (lines?.size() ?: 0); i++) {
+            String line = lines[i] ?: ""
+            depths << Math.max(depth, 0) // depth at *start* of this line
+            for (int j = 0; j < line.length(); j++) {
+                char ch = line.charAt(j)
+                // handle string escapes only when inside a string
+                if (escape) { escape = false; continue }
+                if (inDq || inSq) {
+                    if (ch == '\\') { escape = true; continue }
+                    if (inDq && ch == '"') { inDq = false; continue }
+                    if (inSq && ch == '\'') { inSq = false; continue }
+                    continue
+                }
+                // not in a string here
+                if (ch == '"') { inDq = true; continue }
+                if (ch == '\'') { inSq = true; continue }
+
+                // stop at '//' comments
+                if (ch == '/' && j + 1 < line.length() && line.charAt(j + 1) == '/') {
+                    break
+                }
+
+                if (ch == '{') depth++
+                else if (ch == '}') depth = Math.max(0, depth - 1)
+            }
+        }
+        Logging.debug("    DEBUG: computeBraceDepths => ${depths}")
+        return depths
     }
 }
