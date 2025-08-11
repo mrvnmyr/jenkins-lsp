@@ -168,7 +168,7 @@ class StringHeuristics {
      *  - single/double quoted strings
      *  - triple-quoted strings (''' and """)
      *  - slashy (/.../) and dollar-slashy ($/.../$) strings
-     *  - // line comments and /* ... */ block comments
+     *  - // line comments and /* ... *\/ block comments
      */
     static List<Integer> computeBraceDepths(List<String> lines) {
         def depths = []
