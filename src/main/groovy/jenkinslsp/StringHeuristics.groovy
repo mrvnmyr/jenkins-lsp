@@ -164,14 +164,23 @@ class StringHeuristics {
 
     /**
      * Compute the curly-brace depth at the *start* of each line, ignoring braces
-     * inside string literals and single-line comments. Useful to detect lines that
-     * are physically at the top-level of a script (depth == 0), even inside DSLs.
+     * inside string literals and comments. Handles:
+     *  - single/double quoted strings
+     *  - triple-quoted strings (''' and """)
+     *  - slashy (/.../) and dollar-slashy ($/.../$) strings
+     *  - // line comments and /* ... */ block comments
      */
     static List<Integer> computeBraceDepths(List<String> lines) {
         def depths = []
         int depth = 0
+
         boolean inDq = false
         boolean inSq = false
+        boolean inTqDq = false
+        boolean inTqSq = false
+        boolean inSlashy = false
+        boolean inDollarSlashy = false
+        boolean inBlockComment = false
         boolean escape = false
 
         for (int i = 0; i < (lines?.size() ?: 0); i++) {
@@ -179,23 +188,67 @@ class StringHeuristics {
             depths << Math.max(depth, 0) // depth at *start* of this line
             for (int j = 0; j < line.length(); j++) {
                 char ch = line.charAt(j)
-                // handle string escapes only when inside a string
-                if (escape) { escape = false; continue }
-                if (inDq || inSq) {
-                    if (ch == '\\') { escape = true; continue }
-                    if (inDq && ch == '"') { inDq = false; continue }
-                    if (inSq && ch == '\'') { inSq = false; continue }
+                char n1 = (j + 1 < line.length()) ? line.charAt(j + 1) : '\u0000'
+                char n2 = (j + 2 < line.length()) ? line.charAt(j + 2) : '\u0000'
+
+                // --- inside multi-line comment ---
+                if (inBlockComment) {
+                    if (ch == '*' && n1 == '/') { inBlockComment = false; j++; }
                     continue
                 }
-                // not in a string here
-                if (ch == '"') { inDq = true; continue }
-                if (ch == '\'') { inSq = true; continue }
 
-                // stop at '//' comments
-                if (ch == '/' && j + 1 < line.length() && line.charAt(j + 1) == '/') {
-                    break
+                // --- inside dollar-slashy ---
+                if (inDollarSlashy) {
+                    if (ch == '/' && n1 == '\$') { inDollarSlashy = false; j++; }
+                    continue
                 }
 
+                // --- inside slashy ---
+                if (inSlashy) {
+                    if (!escape && ch == '/') { inSlashy = false; continue }
+                    escape = (!escape && ch == '\\')
+                    continue
+                }
+
+                // --- inside triple quotes ---
+                if (inTqDq) {
+                    if (ch == '"' && n1 == '"' && n2 == '"') { inTqDq = false; j += 2 }
+                    continue
+                }
+                if (inTqSq) {
+                    if (ch == '\'' && n1 == '\'' && n2 == '\'') { inTqSq = false; j += 2 }
+                    continue
+                }
+
+                // --- inside normal quoted strings ---
+                if (inDq) {
+                    if (!escape && ch == '"') { inDq = false }
+                    escape = (!escape && ch == '\\')
+                    continue
+                }
+                if (inSq) {
+                    if (!escape && ch == '\'') { inSq = false }
+                    escape = (!escape && ch == '\\')
+                    continue
+                }
+
+                // --- not inside anything: handle comment/string starts ---
+                // line comment
+                if (ch == '/' && n1 == '/') break
+                // block comment
+                if (ch == '/' && n1 == '*') { inBlockComment = true; j++; continue }
+                // dollar-slashy start
+                if (ch == '\$' && n1 == '/') { inDollarSlashy = true; j++; continue }
+                // triple quotes
+                if (ch == '"' && n1 == '"' && n2 == '"') { inTqDq = true; j += 2; continue }
+                if (ch == '\'' && n1 == '\'' && n2 == '\'') { inTqSq = true; j += 2; continue }
+                // slashy start (best-effort; may mis-detect division but acceptable here)
+                if (ch == '/' && n1 != '/' && n1 != '*') { inSlashy = true; continue }
+                // normal quotes
+                if (ch == '"') { inDq = true; escape = false; continue }
+                if (ch == '\'') { inSq = true; escape = false; continue }
+
+                // --- braces outside of strings/comments ---
                 if (ch == '{') depth++
                 else if (ch == '}') depth = Math.max(0, depth - 1)
             }
