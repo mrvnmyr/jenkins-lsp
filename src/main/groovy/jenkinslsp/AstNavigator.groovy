@@ -69,10 +69,12 @@ class AstNavigator {
     // ----------------------------- Top-level helpers -----------------------------
     /**
      * Find a *top-level* variable decl/assignment (optionally capturing its "type"/def).
-     * Prefers the **last** top-level occurrence. We treat a line as "top-level" if
-     * EITHER the AST says it's not inside a class/method OR the brace depth at the
-     * start of the line is 0. This makes us robust for Groovy scripts compiled into
-     * Script#run (which makes every line look method-scoped by AST).
+     * Prefers the **last** top-level occurrence.
+     *
+     * A line is treated as "top-level" if any of the following holds:
+     *  - AST says it's not inside a class/method (for non-script files)
+     *  - the brace depth at the start of the line is 0
+     *  - the matched identifier starts at column 0 (defensive fallback for odd brace parsing)
      */
     static Map findTopLevelVariableWithType(String word, List<String> lines, SourceUnit unit = null) {
         if (!word) return null
@@ -81,13 +83,8 @@ class AstNavigator {
         for (int i = 0; i < lines.size(); ++i) {
             boolean topByAst = (unit == null) ? true : isTopLevelLine(unit, i)
             boolean topByBraces = (braceDepths == null) ? true : (braceDepths[i] == 0)
-            if (!(topByAst || topByBraces)) {
-                if (i % 20 == 0) {
-                    Logging.debug("    DEBUG: skip line ${i} (topByAst=${topByAst}, depth=${braceDepths ? braceDepths[i] : 'n/a'}) while searching '${word}'")
-                }
-                continue
-            }
             String text = lines[i] ?: ""
+
             // decl with type or 'def'
             def m = (text =~ /\b(def|\w+)\s+${java.util.regex.Pattern.quote(word)}\b/)
             if (m.find()) {
@@ -95,28 +92,36 @@ class AstNavigator {
                 String type = "def"
                 def typeMatch = (text =~ /\b(def|\w+)\s+${java.util.regex.Pattern.quote(word)}\b/)
                 if (typeMatch.find()) type = typeMatch.group(1)
-                best = [line: i, column: c, type: type, word: word]
-                Logging.log("Top-level typed/def decl candidate for '${word}' at ${i} (by ${topByAst?'AST':'braces'}): ${best}")
-                continue
+                boolean allow = topByAst || topByBraces || (c == 0)
+                Logging.log("Top-level typed/def decl candidate for '${word}' at line ${i}, col ${c} (topByAst=${topByAst}, depth=${braceDepths ? braceDepths[i] : 'n/a'}, allow=${allow}, type=${type})")
+                if (allow) {
+                    best = [line: i, column: c, type: type, word: word]
+                    continue
+                }
             }
+
             // fallback: plain assignment without 'def' or type (script binding var)
             def mAssign = (text =~ /\b${java.util.regex.Pattern.quote(word)}\b\s*=/)
             if (mAssign.find()) {
                 int c = mAssign.start()
-                best = [line: i, column: c, type: "def", word: word]
-                Logging.log("Top-level assignment candidate for '${word}' at ${i} (by ${topByAst?'AST':'braces'}): ${best}")
-                continue
+                boolean allow = topByAst || topByBraces || (c == 0)
+                Logging.log("Top-level assignment candidate for '${word}' at line ${i}, col ${c} (topByAst=${topByAst}, depth=${braceDepths ? braceDepths[i] : 'n/a'}, allow=${allow})")
+                if (allow) {
+                    best = [line: i, column: c, type: "def", word: word]
+                    continue
+                }
             }
         }
         if (best != null) {
             Logging.log("Top-level '${word}' picked FINAL candidate (prefer last occurrence): ${best}")
             return best
         }
-        // Fallback: if filtered scan found nothing, try unfiltered pass but still honor braceDepth=0
+
+        // Fallback: if filtered scan found nothing, try a second pass that only
+        // requires column==0 OR braceDepth==0 (still prefers last).
         if (unit != null) {
-            Logging.log("Top-level '${word}' not found with filters; attempting unfiltered fallback (braceDepth==0).")
+            Logging.log("Top-level '${word}' not found with primary pass; attempting relaxed fallback (braceDepth==0 OR col==0).")
             for (int i = 0; i < lines.size(); ++i) {
-                if (braceDepths && braceDepths[i] != 0) continue
                 String text = lines[i] ?: ""
                 def m = (text =~ /\b(def|\w+)\s+${java.util.regex.Pattern.quote(word)}\b/)
                 if (m.find()) {
@@ -124,16 +129,22 @@ class AstNavigator {
                     String type = "def"
                     def typeMatch = (text =~ /\b(def|\w+)\s+${java.util.regex.Pattern.quote(word)}\b/)
                     if (typeMatch.find()) type = typeMatch.group(1)
-                    best = [line: i, column: c, type: type, word: word]
-                    Logging.log("  [fallback] decl/def candidate for '${word}' at ${i} (braceDepth=0): ${best}")
-                    continue
+                    boolean allow = (!braceDepths || braceDepths[i] == 0) || (c == 0)
+                    if (allow) {
+                        best = [line: i, column: c, type: type, word: word]
+                        Logging.log("  [fallback] decl/def candidate for '${word}' at ${i} (depth=${braceDepths ? braceDepths[i] : 'n/a'}, col=${c})")
+                        continue
+                    }
                 }
                 def mAssign = (text =~ /\b${java.util.regex.Pattern.quote(word)}\b\s*=/)
                 if (mAssign.find()) {
                     int c = mAssign.start()
-                    best = [line: i, column: c, type: "def", word: word]
-                    Logging.log("  [fallback] assignment candidate for '${word}' at ${i} (braceDepth=0): ${best}")
-                    continue
+                    boolean allow = (!braceDepths || braceDepths[i] == 0) || (c == 0)
+                    if (allow) {
+                        best = [line: i, column: c, type: "def", word: word]
+                        Logging.log("  [fallback] assignment candidate for '${word}' at ${i} (depth=${braceDepths ? braceDepths[i] : 'n/a'}, col=${c})")
+                        continue
+                    }
                 }
             }
             if (best != null) Logging.log("  [fallback] picked FINAL candidate: ${best}")
@@ -154,52 +165,58 @@ class AstNavigator {
         for (int i = 0; i < lines.size(); ++i) {
             boolean topByAst = (unit == null) ? true : isTopLevelLine(unit, i)
             boolean topByBraces = (braceDepths == null) ? true : (braceDepths[i] == 0)
-            if (!(topByAst || topByBraces)) {
-                if (i % 20 == 0) {
-                    Logging.debug("    DEBUG: skip line ${i} (topByAst=${topByAst}, depth=${braceDepths ? braceDepths[i] : 'n/a'}) while searching '${word}' (no-type)")
-                }
-                continue
-            }
             String text = lines[i] ?: ""
+
             def m = (text =~ /\b(def|\w+)\s+${java.util.regex.Pattern.quote(word)}\b/)
             if (m.find()) {
                 int c = m.start() + m.group(0).lastIndexOf(word)
-                best = [line: i, column: c, word: word]
-                Logging.log("Top-level decl candidate for '${word}' at ${i} (by ${topByAst?'AST':'braces'}): ${best}")
-                continue
+                boolean allow = topByAst || topByBraces || (c == 0)
+                Logging.log("Top-level decl candidate for '${word}' at line ${i}, col ${c} (topByAst=${topByAst}, depth=${braceDepths ? braceDepths[i] : 'n/a'}, allow=${allow})")
+                if (allow) {
+                    best = [line: i, column: c, word: word]
+                    continue
+                }
             }
             // fallback: detect simple assignment (no type/def)
             def mAssign = (text =~ /\b${java.util.regex.Pattern.quote(word)}\b\s*=/)
             if (mAssign.find()) {
                 int c = mAssign.start()
-                best = [line: i, column: c, word: word]
-                Logging.log("Top-level assignment candidate for '${word}' at ${i} (by ${topByAst?'AST':'braces'}): ${best}")
-                continue
+                boolean allow = topByAst || topByBraces || (c == 0)
+                Logging.log("Top-level assignment candidate for '${word}' at line ${i}, col ${c} (topByAst=${topByAst}, depth=${braceDepths ? braceDepths[i] : 'n/a'}, allow=${allow})")
+                if (allow) {
+                    best = [line: i, column: c, word: word]
+                    continue
+                }
             }
         }
         if (best != null) {
             Logging.log("Top-level '${word}' picked FINAL candidate (prefer last occurrence): ${best}")
             return best
         }
-        // Fallback: unfiltered scan if filtered pass found nothing (still honor braceDepth=0)
+        // Fallback: relaxed pass honoring braceDepth==0 OR col==0 (still prefer last)
         if (unit != null) {
-            Logging.log("Top-level '${word}' not found with AST/brace filters; attempting unfiltered fallback (no-type, braceDepth==0).")
+            Logging.log("Top-level '${word}' not found with AST/brace filters; attempting relaxed fallback (no-type, depth==0 OR col==0).")
             for (int i = 0; i < lines.size(); ++i) {
-                if (braceDepths && braceDepths[i] != 0) continue
                 String text = lines[i] ?: ""
                 def m = (text =~ /\b(def|\w+)\s+${java.util.regex.Pattern.quote(word)}\b/)
                 if (m.find()) {
                     int c = m.start() + m.group(0).lastIndexOf(word)
-                    best = [line: i, column: c, word: word]
-                    Logging.log("  [fallback] decl candidate for '${word}' at ${i} (braceDepth=0): ${best}")
-                    continue
+                    boolean allow = (!braceDepths || braceDepths[i] == 0) || (c == 0)
+                    if (allow) {
+                        best = [line: i, column: c, word: word]
+                        Logging.log("  [fallback] decl candidate for '${word}' at ${i} (depth=${braceDepths ? braceDepths[i] : 'n/a'}, col=${c})")
+                        continue
+                    }
                 }
                 def mAssign = (text =~ /\b${java.util.regex.Pattern.quote(word)}\b\s*=/)
                 if (mAssign.find()) {
                     int c = mAssign.start()
-                    best = [line: i, column: c, word: word]
-                    Logging.log("  [fallback] assignment candidate for '${word}' at ${i} (braceDepth=0): ${best}")
-                    continue
+                    boolean allow = (!braceDepths || braceDepths[i] == 0) || (c == 0)
+                    if (allow) {
+                        best = [line: i, column: c, word: word]
+                        Logging.log("  [fallback] assignment candidate for '${word}' at ${i} (depth=${braceDepths ? braceDepths[i] : 'n/a'}, col=${c})")
+                        continue
+                    }
                 }
             }
             if (best != null) Logging.log("  [fallback] picked FINAL candidate: ${best}")
