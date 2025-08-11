@@ -376,7 +376,9 @@ class LspServer {
             // Decide whether this identifier is likely a TYPE reference.
             boolean classExists = false
             try {
-                for (cls in lastParsedUnit?.AST?.classes ?: []) {
+                def clsList = lastParsedUnit?.AST?.classes
+                Logging.log("Type-context check: scanning ${clsList?.size() ?: 0} classes for '${word}'")
+                for (cls in (clsList ?: [])) {
                     if (cls?.nameWithoutPackage == word) { classExists = true; break }
                 }
             } catch (Throwable t) {
