@@ -169,6 +169,10 @@ class MemberResolver {
     /**
      * From a candidate assignment line, try to locate a map literal region starting with '[' and
      * search for `key:` (or '"key":' / "'key':") at top level of that literal. Returns [line,col] or null.
+     *
+     * NOTE: This scanner is quote-aware and will detect keys **anywhere** on the line while
+     * depth==1, not only when the key starts at the line's beginning. This fixes cases like:
+     *   def ctx = [foo: 1, bar: 2]
      */
     private static Map findKeyInsideMapLiteral(List<String> lines, int startLine, String varName, String key) {
         int i = Math.max(0, Math.min(startLine, lines.size() - 1))
@@ -178,7 +182,7 @@ class MemberResolver {
         int bracketStartLine = -1
         int bracketStartCol = -1
 
-        // 1) Find '=' token from the assignment line forward (after the standalone varName)
+        // 1) Find '=' token from the assignment line forward
         while (j < lines.size()) {
             String txt = lines[j] ?: ""
             int scanFrom = 0
@@ -225,37 +229,86 @@ class MemberResolver {
         // 3) Walk forward to find matching ']' and track depth to stay at top-level (depth==1)
         int depth = 0
         boolean started = false
+        boolean inDq = false
+        boolean inSq = false
+        boolean escape = false
+
         for (int r = bracketStartLine; r < lines.size(); r++) {
             String txt = lines[r] ?: ""
             for (int c = (r == bracketStartLine ? bracketStartCol : 0); c < txt.length(); c++) {
                 char ch = txt.charAt(c)
                 char n1 = (c + 1 < txt.length()) ? txt.charAt(c + 1) : '\u0000'
 
-                if (ch == '[') { depth++; started = true }
-                else if (ch == ']') {
+                // handle quotes for colon/key detection
+                if (!escape && !inSq && ch == '"') { inDq = !inDq; continue }
+                if (!escape && !inDq && ch == '\'') { inSq = !inSq; continue }
+                escape = (!escape && ch == '\\')
+                if (inDq || inSq) continue
+
+                if (ch == '[') { depth++; started = true; continue }
+                if (ch == ']') {
                     depth--
                     if (started && depth <= 0) {
-                        Logging.log("MapKey: end ']' for ${varName} at ${r}:${c} (no key '${key}' found)")
+                        Logging.log("MapKey: end ']' for ${varName} at ${r}:${c}")
                         return null
                     }
+                    continue
                 }
 
-                // At top level of the map (depth==1), look for `key:` (allow quoted keys)
+                // At top level of the map (depth==1), look for ... key ... :
+                if (started && depth == 1 && ch == ':') {
+                    // Scan backward to find the token (quoted or bare) preceding ':'
+                    int endIdx = c - 1
+                    while (endIdx >= 0 && Character.isWhitespace(txt.charAt(endIdx))) endIdx--
+                    if (endIdx < 0) continue
+
+                    int startIdx = endIdx
+                    boolean quoted = false
+                    if (txt.charAt(startIdx) == '"' || txt.charAt(startIdx) == '\'') {
+                        quoted = true
+                        char quote = txt.charAt(startIdx)
+                        startIdx--
+                        while (startIdx >= 0 && txt.charAt(startIdx) != quote) startIdx--
+                        if (startIdx >= 0) {
+                            // token spans (startIdx+1 .. endIdx-1) when quoted
+                            String token = txt.substring(startIdx + 1, endIdx).trim()
+                            Logging.log("MapKey: depth1 ':' backscan (quoted) token='${token}' at ${r}:${startIdx + 1}")
+                            if (token == key) {
+                                int col = startIdx + 1
+                                Logging.log("MapKey: matched quoted key '${key}' at ${r}:${col}")
+                                return [line: r, column: col]
+                            }
+                        }
+                    } else {
+                        while (startIdx >= 0 && (Character.isJavaIdentifierPart(txt.charAt(startIdx)))) startIdx--
+                        int tokenStart = startIdx + 1
+                        if (tokenStart <= endIdx) {
+                            String token = txt.substring(tokenStart, endIdx + 1)
+                            Logging.log("MapKey: depth1 ':' backscan (bare) token='${token}' at ${r}:${tokenStart}")
+                            if (token == key) {
+                                int col = tokenStart
+                                Logging.log("MapKey: matched unquoted key '${key}' at ${r}:${col}")
+                                return [line: r, column: col]
+                            }
+                        }
+                    }
+                    // continue scanning this line
+                }
+
+                // --- legacy regex fallback (also works when key is at start of line) ---
                 if (started && depth == 1) {
-                    // Pattern A:    ^\s*key\s*:
                     def patA = (txt =~ /(^\s*)(${java.util.regex.Pattern.quote(key)})\s*:/)
                     if (patA.find()) {
                         int indentLen = (patA.group(1) ?: "").length()
                         int col = indentLen
-                        Logging.log("MapKey: matched unquoted key '${key}' at ${r}:${col}  line='${txt}' (indent=${indentLen})")
+                        Logging.log("MapKey: fallback matched unquoted key '${key}' at ${r}:${col}  line='${txt}' (indent=${indentLen})")
                         return [line: r, column: col]
                     }
-                    // Pattern B:    ^\s*["']key["']\s*:
                     def patB = (txt =~ /(^\s*)["'](${java.util.regex.Pattern.quote(key)})["']\s*:/)
                     if (patB.find()) {
                         int indentLen = (patB.group(1) ?: "").length()
                         int col = indentLen + 1 /*skip opening quote*/
-                        Logging.log("MapKey: matched quoted key '${key}' at ${r}:${col}  line='${txt}' (indent=${indentLen})")
+                        Logging.log("MapKey: fallback matched quoted key '${key}' at ${r}:${col}  line='${txt}' (indent=${indentLen})")
                         return [line: r, column: col]
                     }
                 }
