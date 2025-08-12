@@ -77,6 +77,10 @@ class AstNavigator {
      *   3) If still nothing, bottom-up scan accepting column==0 as a last resort.
      *   4) Final safety net: bottom-up scan that accepts a valid decl/assignment **anywhere**.
      *
+     * Extra guard: if a strict/AST/relaxed pass finds a candidate, we still check if there
+     * is a *later* valid decl/assignment anywhere in the file and prefer that, to protect
+     * against occasional brace-depth misparsing that can skip the true last global.
+     *
      * Detailed DEBUG logs show why a candidate was accepted or rejected.
      */
     static Map findTopLevelVariableWithType(String word, List<String> lines, SourceUnit unit = null) {
@@ -122,11 +126,21 @@ class AstNavigator {
             return null
         }
 
+        Closure<Map> preferLatestAnywhereIfLater = { Map current ->
+            def latest = bottomUpScan { int ii, int cc -> true }
+            if (latest && current && latest.line > current.line) {
+                Logging.log("  [scan] overriding match ${current.line}:${current.column} with later ANYWHERE ${latest.line}:${latest.column} to guard against depth/AST misparse")
+                return latest
+            }
+            return current
+        }
+
         // Pass 1: strict true top-level (brace depth == 0)
         Logging.log("findTopLevelVariableWithType('${word}'): strict depth==0 bottom-up scan")
         def res = bottomUpScan { int i, int c -> braceDepths && braceDepths[i] == 0 }
         if (res != null) {
-            Logging.log("Top-level '${word}' resolved by strict depth==0: ${res}")
+            res = preferLatestAnywhereIfLater(res)
+            Logging.log("Top-level '${word}' resolved by strict depth==0 (post-check applied): ${res}")
             return res
         }
 
@@ -134,7 +148,8 @@ class AstNavigator {
         Logging.log("findTopLevelVariableWithType('${word}'): AST-top-level bottom-up scan (fallback)")
         res = bottomUpScan { int i, int c -> unit ? isTopLevelLine(unit, i) : true }
         if (res != null) {
-            Logging.log("Top-level '${word}' resolved by AST-top-level fallback: ${res}")
+            res = preferLatestAnywhereIfLater(res)
+            Logging.log("Top-level '${word}' resolved by AST-top-level fallback (post-check applied): ${res}")
             return res
         }
 
@@ -142,7 +157,8 @@ class AstNavigator {
         Logging.log("findTopLevelVariableWithType('${word}'): relaxed col==0 bottom-up scan (last resort)")
         res = bottomUpScan { int i, int c -> c == 0 }
         if (res != null) {
-            Logging.log("Top-level '${word}' resolved by relaxed col==0 fallback: ${res}")
+            res = preferLatestAnywhereIfLater(res)
+            Logging.log("Top-level '${word}' resolved by relaxed col==0 fallback (post-check applied): ${res}")
             return res
         }
 
@@ -160,7 +176,8 @@ class AstNavigator {
 
     /**
      * Same as findTopLevelVariableWithType but without returning a type.
-     * Uses the same 4-pass bottom-up strategy.
+     * Uses the same 4-pass bottom-up strategy plus the "prefer-latest-anywhere"
+     * post-check as a guard against depth/AST misclassification.
      */
     static Map findTopLevelVariable(String word, List<String> lines, SourceUnit unit = null) {
         if (!word) return null
@@ -198,11 +215,21 @@ class AstNavigator {
             return null
         }
 
+        Closure<Map> preferLatestAnywhereIfLater = { Map current ->
+            def latest = bottomUpScan { int ii, int cc -> true }
+            if (latest && current && latest.line > current.line) {
+                Logging.log("  [scan] overriding (no-type) match ${current.line}:${current.column} with later ANYWHERE ${latest.line}:${latest.column} to guard against depth/AST misparse")
+                return latest
+            }
+            return current
+        }
+
         // Pass 1: strict true top-level (brace depth == 0)
         Logging.log("findTopLevelVariable('${word}'): strict depth==0 bottom-up scan")
         def res = bottomUpScan { int i, int c -> braceDepths && braceDepths[i] == 0 }
         if (res != null) {
-            Logging.log("Top-level '${word}' (no-type) resolved by strict depth==0: ${res}")
+            res = preferLatestAnywhereIfLater(res)
+            Logging.log("Top-level '${word}' (no-type) resolved by strict depth==0 (post-check applied): ${res}")
             return res
         }
 
@@ -210,7 +237,8 @@ class AstNavigator {
         Logging.log("findTopLevelVariable('${word}'): AST-top-level bottom-up scan (fallback)")
         res = bottomUpScan { int i, int c -> unit ? isTopLevelLine(unit, i) : true }
         if (res != null) {
-            Logging.log("Top-level '${word}' (no-type) resolved by AST-top-level fallback: ${res}")
+            res = preferLatestAnywhereIfLater(res)
+            Logging.log("Top-level '${word}' (no-type) resolved by AST-top-level fallback (post-check applied): ${res}")
             return res
         }
 
@@ -218,7 +246,8 @@ class AstNavigator {
         Logging.log("findTopLevelVariable('${word}'): relaxed col==0 bottom-up scan (last resort)")
         res = bottomUpScan { int i, int c -> c == 0 }
         if (res != null) {
-            Logging.log("Top-level '${word}' (no-type) resolved by relaxed col==0 fallback: ${res}")
+            res = preferLatestAnywhereIfLater(res)
+            Logging.log("Top-level '${word}' (no-type) resolved by relaxed col==0 fallback (post-check applied): ${res}")
             return res
         }
 
