@@ -120,14 +120,20 @@ class MemberResolver {
                 return [found: false, matchAtCursor: true, debug: "${varName} (${type}) no classNode"]
             }
         } else {
-            // --- NEW: Map-literal key resolution for globals/locals like `ctx = [ foo: ... ]` then `ctx.foo` ---
+            // --- Map-style & dynamic heuristics ---
             Logging.log("No static type for '${varName}'. Trying map-literal key resolution for '${varName}.${memberName}'")
             def mapKey = resolveMapKeyFromAssignment(unit, lines, varName, memberName)
             if (mapKey) {
                 Logging.log("Map-literal key resolution succeeded for ${varName}.${memberName} at ${mapKey.line}:${mapKey.column}")
                 return [found: true, matchAtCursor: true, debug: "map ${varName}[${memberName}]", line: mapKey.line, column: mapKey.column, word: memberName]
             }
-            Logging.log("Map-literal key resolution failed for ${varName}.${memberName}")
+            Logging.log("Map-literal key resolution failed for ${varName}.${memberName}; trying property assignment scan")
+            def propAssign = resolveTopLevelPropertyAssignment(unit, lines, varName, memberName)
+            if (propAssign) {
+                Logging.log("Property-assignment resolution succeeded for ${varName}.${memberName} at ${propAssign.line}:${propAssign.column}")
+                return [found: true, matchAtCursor: true, debug: "assign ${varName}.${memberName}", line: propAssign.line, column: propAssign.column, word: memberName]
+            }
+            Logging.log("Dynamic resolution failed for ${varName}.${memberName}")
             return [found: false, matchAtCursor: true, debug: "no type for ${varName}"]
         }
     }
@@ -226,18 +232,17 @@ class MemberResolver {
 
                 // At top level of the map (depth==1), look for `key:` (allow quoted keys)
                 if (started && depth == 1) {
-                    // quick check only at likely key starts (beginning of token)
                     // Pattern A:    ^\s*key\s*:
                     def patA = (txt =~ /(^\s*)${java.util.regex.Pattern.quote(key)}\s*:/)
                     if (patA.find()) {
-                        int col = patA.start(0) + patA.group(1).length()
+                        int col = patA.start(2) >= 0 ? patA.start(2) : (patA.start(0) + patA.group(1).length())
                         Logging.log("MapKey: matched unquoted key '${key}' at ${r}:${col}  line='${txt}'")
                         return [line: r, column: col]
                     }
                     // Pattern B:    ^\s*["']key["']\s*:
-                    def patB = (txt =~ /(^\s*)["']${java.util.regex.Pattern.quote(key)}["']\s*:/)
+                    def patB = (txt =~ /(^\s*)["'](${java.util.regex.Pattern.quote(key)})["']\s*:/)
                     if (patB.find()) {
-                        int col = patB.start(0) + patB.group(1).length() + 1 /*skip opening quote*/
+                        int col = patB.start(2)
                         Logging.log("MapKey: matched quoted key '${key}' at ${r}:${col}  line='${txt}'")
                         return [line: r, column: col]
                     }
@@ -246,5 +251,37 @@ class MemberResolver {
         }
         Logging.log("MapKey: key '${key}' not found inside map-literal assigned to ${varName} starting at ${bracketStartLine}:${bracketStartCol}")
         return null
+    }
+
+    /**
+     * Heuristic: find the last (preferably top-level) assignment `var.prop = ...`
+     * and return the position of the `prop` token.
+     */
+    private static Map resolveTopLevelPropertyAssignment(SourceUnit unit, List<String> lines, String varName, String prop) {
+        if (!lines || !varName || !prop) return null
+        def braceDepths = StringHeuristics.computeBraceDepths(lines)
+
+        Closure<Map> scan = { Closure<Boolean> allow ->
+            for (int i = lines.size() - 1; i >= 0; --i) {
+                String txt = lines[i] ?: ""
+                def rx = (~/(^\s*)\b${java.util.regex.Pattern.quote(varName)}\b\s*\.\s*(${java.util.regex.Pattern.quote(prop)})\b\s*=/)
+                def m = rx.matcher(txt)
+                if (m.find()) {
+                    int col = m.start(2) // start of the property token
+                    boolean ok = allow(i, col)
+                    Logging.log("PropAssign: matched '${varName}.${prop} = ...' at ${i}:${col} depth=${braceDepths ? braceDepths[i] : 'n/a'} allow=${ok} txt='${txt.trim()}'")
+                    if (ok) return [line: i, column: col]
+                }
+            }
+            return null
+        }
+
+        // Pass 1: strict top-level (brace depth == 0)
+        def res = scan { int i, int c -> braceDepths && braceDepths[i] == 0 }
+        if (res) return res
+
+        // Pass 2: anywhere (safety net)
+        res = scan { int i, int c -> true }
+        return res
     }
 }
