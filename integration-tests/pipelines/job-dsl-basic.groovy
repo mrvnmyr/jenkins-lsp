@@ -7,9 +7,9 @@
 // RESERVED
 // RESERVED
 // RESERVED
-// RESERVED
-// RESERVED
-// RESERVED
+def ctx = [
+    foo: "foobar",
+]
 // RESERVED
 // RESERVED
 // RESERVED
@@ -26,5 +26,5 @@ folder(somedir) {
 }
 
 multibranchPipelineJob("$somedir/$somerepo") {
-    displayName(coolrepo)
+    displayName(ctx.foo)
 }
