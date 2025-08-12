@@ -16,7 +16,8 @@ class MemberResolver {
      * or null, or {found:false,matchAtCursor:true,...} when the pattern is at cursor but couldn't resolve.
      */
     static Map resolveQualifiedProperty(SourceUnit unit, List<String> lines, int lineNum, int charNum, String lineText) {
-        def m = (lineText =~ /(\b\w+)\.(\w+)\b/)
+        // Allow optional whitespace after the dot so "ctx.  foo" still counts.
+        def m = (lineText =~ /(\b\w+)\.\s*([A-Za-z_][A-Za-z0-9_]*)\b/)
         boolean foundAtCursor = false
         int foundStart = -1
         int foundEnd = -1
@@ -25,14 +26,26 @@ class MemberResolver {
         while (m.find()) {
             int propStart = m.start(2)   // start of member name
             int propEnd = m.end(2)       // end of member name (exclusive)
-            if (charNum >= propStart && charNum < propEnd) {
+            // index of the '.' between qualifier and member (no whitespace inside group(1))
+            int dotIndex = m.start(1) + (m.group(1)?.length() ?: 0)
+            // Treat cursor as "on this qualified access" when:
+            //   - it's on any character of the member token, OR
+            //   - it's exactly on the '.', OR
+            //   - it's in the whitespace region between '.' and the member start.
+            boolean onMember = (charNum >= propStart && charNum < propEnd)
+            boolean onDot = (charNum == dotIndex)
+            boolean inWsAfterDot = (charNum > dotIndex && charNum < propStart)
+            if (onMember || onDot || inWsAfterDot) {
                 foundAtCursor = true
                 foundStart = m.start()
                 foundEnd = m.end()
                 memberStart = propStart
                 varName = m.group(1)
                 memberName = m.group(2)
+                Logging.log("Qualified pattern at cursor: '${varName}.${memberName}'  dotIndex=${dotIndex} propStart=${propStart} propEnd=${propEnd} charNum=${charNum}  flags(onMember=${onMember},onDot=${onDot},inWs=${inWsAfterDot})")
                 break
+            } else {
+                Logging.debug("    DEBUG: skip qualified '${m.group(1)}.${m.group(2)}' for cursor ${charNum} (range ${propStart}-${propEnd}, dot=${dotIndex})")
             }
         }
         if (!foundAtCursor) return null
@@ -153,12 +166,13 @@ class MemberResolver {
             if (hit) return hit
         }
 
-        // Fallback: search entire file for an assignment of the form `varName = [`
+        // Fallback: search entire file for assignments of the form `varName = ...`
         Logging.log("MapKey: scanning entire file for '${varName} = [' to resolve key '${key}'")
         for (int i = lines.size() - 1; i >= 0; --i) {
             def ln = lines[i] ?: ""
             def assign = (ln =~ /(^|\b)${java.util.regex.Pattern.quote(varName)}\b\s*=/)
             if (assign.find()) {
+                Logging.debug("    DEBUG: MapKey: candidate assignment line ${i}: '${ln.trim()}'")
                 def hit = findKeyInsideMapLiteral(lines, i, varName, key)
                 if (hit) return hit
             }
