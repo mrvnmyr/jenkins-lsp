@@ -174,10 +174,11 @@ class MemberResolver {
         int i = Math.max(0, Math.min(startLine, lines.size() - 1))
         int j = i
         int eqLine = -1
+        int eqCol = -1
         int bracketStartLine = -1
         int bracketStartCol = -1
 
-        // 1) Find '=' token from the assignment line forward
+        // 1) Find '=' token from the assignment line forward (after the standalone varName)
         while (j < lines.size()) {
             String txt = lines[j] ?: ""
             int scanFrom = 0
@@ -191,17 +192,18 @@ class MemberResolver {
                 scanFrom = m.end()
             }
             int eq = txt.indexOf('=', scanFrom)
-            if (eq >= 0) { eqLine = j; break }
+            if (eq >= 0) { eqLine = j; eqCol = eq; break }
             j++
         }
         if (eqLine < 0) {
             Logging.log("MapKey: no '=' found after ${varName} on/after line ${i}")
             return null
         }
+        Logging.log("MapKey: '=' for ${varName} at ${eqLine}:${eqCol}")
 
         // 2) From after '=', find first '[' starting the literal (may be same or next lines)
         int kLine = eqLine
-        int kColFrom = (lines[eqLine] ?: "").indexOf('=', 0) + 1
+        int kColFrom = Math.max(0, eqCol + 1)
         int sqLine = -1, sqCol = -1
         while (kLine < lines.size()) {
             String txt = lines[kLine] ?: ""
@@ -227,23 +229,33 @@ class MemberResolver {
             String txt = lines[r] ?: ""
             for (int c = (r == bracketStartLine ? bracketStartCol : 0); c < txt.length(); c++) {
                 char ch = txt.charAt(c)
+                char n1 = (c + 1 < txt.length()) ? txt.charAt(c + 1) : '\u0000'
+
                 if (ch == '[') { depth++; started = true }
-                else if (ch == ']') { depth--; if (started && depth <= 0) { Logging.log("MapKey: end ']' for ${varName} at ${r}:${c}"); return null } }
+                else if (ch == ']') {
+                    depth--
+                    if (started && depth <= 0) {
+                        Logging.log("MapKey: end ']' for ${varName} at ${r}:${c} (no key '${key}' found)")
+                        return null
+                    }
+                }
 
                 // At top level of the map (depth==1), look for `key:` (allow quoted keys)
                 if (started && depth == 1) {
                     // Pattern A:    ^\s*key\s*:
-                    def patA = (txt =~ /(^\s*)${java.util.regex.Pattern.quote(key)}\s*:/)
+                    def patA = (txt =~ /(^\s*)(${java.util.regex.Pattern.quote(key)})\s*:/)
                     if (patA.find()) {
-                        int col = patA.start(2) >= 0 ? patA.start(2) : (patA.start(0) + patA.group(1).length())
-                        Logging.log("MapKey: matched unquoted key '${key}' at ${r}:${col}  line='${txt}'")
+                        int indentLen = (patA.group(1) ?: "").length()
+                        int col = indentLen
+                        Logging.log("MapKey: matched unquoted key '${key}' at ${r}:${col}  line='${txt}' (indent=${indentLen})")
                         return [line: r, column: col]
                     }
                     // Pattern B:    ^\s*["']key["']\s*:
                     def patB = (txt =~ /(^\s*)["'](${java.util.regex.Pattern.quote(key)})["']\s*:/)
                     if (patB.find()) {
-                        int col = patB.start(2)
-                        Logging.log("MapKey: matched quoted key '${key}' at ${r}:${col}  line='${txt}'")
+                        int indentLen = (patB.group(1) ?: "").length()
+                        int col = indentLen + 1 /*skip opening quote*/
+                        Logging.log("MapKey: matched quoted key '${key}' at ${r}:${col}  line='${txt}' (indent=${indentLen})")
                         return [line: r, column: col]
                     }
                 }
