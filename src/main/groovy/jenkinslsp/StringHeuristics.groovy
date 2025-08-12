@@ -87,16 +87,24 @@ class StringHeuristics {
      * If cursor is inside a $var (no braces) within a GString, return the var name.
      * Otherwise return null.
      *
-     * NOTE: Treat the '$' itself as a valid hit location to be more forgiving.
+     * NOTE: Treat the '$' itself as a valid hit location, but the end index of the
+     * identifier is *exclusive*. This prevents false positives when the cursor sits
+     * just after the variable (e.g., on the '/' in "$var/").
      */
     static String gstringVarAt(String line, int pos) {
         if (line == null) return null
         def m = (line =~ /\$[A-Za-z_][A-Za-z0-9_]*/)
         while (m.find()) {
             int start = m.start()
-            int end = m.end()
-            // accept when cursor is on the '$' or anywhere within the identifier
-            if (pos >= start && pos <= end) {
+            int end = m.end() // exclusive
+            // If the cursor is exactly at the end (on the next char), do NOT treat as a hit.
+            if (pos == end) {
+                char chAfter = (end < (line?.length() ?: 0)) ? line.charAt(end) : '\u0000'
+                Logging.debug("    DEBUG: gstringVarAt pos==end for token '${line.substring(start, end)}', next='${chAfter}' -> ignore")
+                continue
+            }
+            // accept when cursor is on the '$' or anywhere within the identifier (exclusive end)
+            if (pos >= start && pos < end) {
                 String var = line.substring(start + 1, end)
                 Logging.debug("    DEBUG: gstringVarAt matched \$${var} at range ${start}-${end}, pos=${pos}")
                 return var
