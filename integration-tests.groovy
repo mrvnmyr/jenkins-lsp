@@ -375,8 +375,8 @@ LspTestClient.run(lspCmd, debug){ def client ->
     tuPipelinesJobDslBasic.assertGoto(from: "24:8", to: "21:1", test: "resolving global variable 'somedir'")
     tuPipelinesJobDslBasic.assertGoto(from: "28:26", to: "21:1", test: "resolving global variable 'somedir' in a string literal without braces")
     tuPipelinesJobDslBasic.assertGoto(from: "28:35", to: "22:1", test: "resolving global variable 'somerepo' in a string literal without braces")
-    tuPipelinesJobDslBasic.assertGoto(from: "29:21", to: "11:5", test: "resolving global map variable 'ctx.foo' property)
-    tuPipelinesJobDslBasic.assertGoto(from: "29:21", to: "11:5", test: "resolving global map variable 'ctx')
-    tuBasics.assertNoGoto(from: "29:17", to: "10:5", test: "resolving '/' between string interpolation")
+    tuPipelinesJobDslBasic.assertGoto(from: "29:21", to: "11:5", test: "resolving global map variable 'ctx.foo' property")
+    tuPipelinesJobDslBasic.assertGoto(from: "29:17", to: "10:5", test: "resolving global map variable 'ctx'")
+    tuBasics.assertNoGoto(from: "28:33", test: "resolving '/' between string interpolation")
     tuBasics.assertNoDiagnostic()
 }
