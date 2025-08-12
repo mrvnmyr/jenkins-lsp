@@ -146,6 +146,15 @@ class AstNavigator {
             for (int i = lines.size() - 1; i >= 0; --i) {
                 String text = lines[i] ?: ""
 
+                // --- PRIORITY: start-of-line assignment (guards against property writes like x.somedir=) ---
+                def mAssignSOL = (text =~ /(^\s*)\b${java.util.regex.Pattern.quote(word)}\b\s*=/)
+                if (mAssignSOL.find()) {
+                    int col = mAssignSOL.start(0) + mAssignSOL.group(1).length()
+                    boolean ok = allow(i, col)
+                    Logging.log("  [scan] assign@SOL '${word}' at ${i}:${col} depth=${braceDepths ? braceDepths[i] : 'n/a'} allow=${ok} text='${text.trim()}'")
+                    if (ok) return [line: i, column: col, type: "def", word: word]
+                }
+
                 // decl with type or 'def'
                 def m = (text =~ /\b(def|\w+)\s+${java.util.regex.Pattern.quote(word)}\b/)
                 if (m.find()) {
@@ -180,7 +189,9 @@ class AstNavigator {
         }
 
         Closure<Map> preferLatestAnywhereIfLater = { Map current ->
+            Logging.log("  [scan] preferLatestAnywhereIfLater: current=${current}")
             def latest = bottomUpScan { int ii, int cc -> true }
+            Logging.log("  [scan] preferLatestAnywhereIfLater: latest-anywhere=${latest}")
             if (latest && current && latest.line > current.line) {
                 Logging.log("  [scan] overriding match ${current.line}:${current.column} with later ANYWHERE ${latest.line}:${latest.column} to guard against depth/AST misparse")
                 return latest
@@ -282,6 +293,15 @@ class AstNavigator {
             for (int i = lines.size() - 1; i >= 0; --i) {
                 String text = lines[i] ?: ""
 
+                // --- PRIORITY: start-of-line assignment to avoid matching x.somedir= ---
+                def mAssignSOL = (text =~ /(^\s*)\b${java.util.regex.Pattern.quote(word)}\b\s*=/)
+                if (mAssignSOL.find()) {
+                    int colSOL = mAssignSOL.start(0) + mAssignSOL.group(1).length()
+                    boolean okSOL = allow(i, colSOL)
+                    Logging.log("  [scan] (no-type) assign@SOL '${word}' at ${i}:${colSOL} depth=${braceDepths ? braceDepths[i] : 'n/a'} allow=${okSOL} text='${text.trim()}'")
+                    if (okSOL) return [line: i, column: colSOL, word: word]
+                }
+
                 def m = (text =~ /\b(def|\w+)\s+${java.util.regex.Pattern.quote(word)}\b/)
                 if (m.find()) {
                     int c = m.start() + m.group(0).lastIndexOf(word)
@@ -310,7 +330,9 @@ class AstNavigator {
         }
 
         Closure<Map> preferLatestAnywhereIfLater = { Map current ->
+            Logging.log("  [scan] (no-type) preferLatestAnywhereIfLater: current=${current}")
             def latest = bottomUpScan { int ii, int cc -> true }
+            Logging.log("  [scan] (no-type) preferLatestAnywhereIfLater: latest-anywhere=${latest}")
             if (latest && current && latest.line > current.line) {
                 Logging.log("  [scan] overriding (no-type) match ${current.line}:${current.column} with later ANYWHERE ${latest.line}:${latest.column} to guard against depth/AST misparse")
                 return latest
