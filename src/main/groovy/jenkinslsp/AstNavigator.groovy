@@ -81,6 +81,13 @@ class AstNavigator {
      * is a *later* valid decl/assignment anywhere in the file and prefer that, to protect
      * against occasional brace-depth misparsing that can skip the true last global.
      *
+     * Also recognizes **multi-line** declarations/assignments like:
+     *   String
+     *   somedir = "..."
+     * or
+     *   somedir
+     *     = "..."
+     *
      * Detailed DEBUG logs show why a candidate was accepted or rejected.
      */
     static Map findTopLevelVariableWithType(String word, List<String> lines, SourceUnit unit = null) {
@@ -95,6 +102,44 @@ class AstNavigator {
             boolean ok = !(next == '(' || next == '{')
             Logging.debug("    DEBUG: validDeclEdge check afterVarIdx=${afterVarIdx} next='${next}' => ${ok}")
             return ok
+        }
+
+        // Multi-line helpers (look around the current line)
+        Closure<Map> tryMultilineDeclOrAssignWithType = { int i ->
+            String text = lines[i] ?: ""
+
+            // Case A: name alone on a line; previous non-empty line defines a type or 'def'
+            def nameOnly = (text =~ /(^\s*)\b${java.util.regex.Pattern.quote(word)}\b\s*[,)]?\s*$/)
+            if (nameOnly.find()) {
+                int j = i - 1
+                while (j >= 0 && (lines[j]?.trim()?.length() ?: 0) == 0) j--
+                if (j >= 0) {
+                    String prev = lines[j]?.trim() ?: ""
+                    def prevType = (prev =~ /^(def|[A-Z][A-Za-z0-9_]*(?:\s*<.*?>)?)\s*[\\,]?\s*$/)
+                    if (prevType.find()) {
+                        String typeName = prevType.group(1) ?: "def"
+                        int col = nameOnly.start(0) + nameOnly.group(1).length()
+                        Logging.log("  [scan-ML] matched multi-line decl for '${word}' at ${i}:${col} with prev type '${typeName}' from line ${j}")
+                        return [line: i, column: col, type: typeName, word: word]
+                    }
+                }
+            }
+
+            // Case B: name at end of line and next non-empty line starts with '=' (split assignment)
+            def nameEnd = (text =~ /(^\s*)\b${java.util.regex.Pattern.quote(word)}\b\s*$/)
+            if (nameEnd.find()) {
+                int k = i + 1
+                while (k < lines.size() && (lines[k]?.trim()?.length() ?: 0) == 0) k++
+                if (k < lines.size()) {
+                    String next = lines[k]?.trim() ?: ""
+                    if (next.startsWith("=")) {
+                        int col = nameEnd.start(0) + nameEnd.group(1).length()
+                        Logging.log("  [scan-ML] matched split assignment for '${word}' at ${i}:${col} (next line ${k} starts with '=')")
+                        return [line: i, column: col, type: "def", word: word]
+                    }
+                }
+            }
+            return null
         }
 
         Closure<Map> bottomUpScan = { Closure<Boolean> allow ->
@@ -121,6 +166,14 @@ class AstNavigator {
                     boolean ok = allow(i, c)
                     Logging.log("  [scan] assign '${word}' at ${i}:${c} depth=${braceDepths ? braceDepths[i] : 'n/a'} allow=${ok}")
                     if (ok) return [line: i, column: c, type: "def", word: word]
+                }
+
+                // Multi-line decl/assign heuristics (look around this line)
+                def ml = tryMultilineDeclOrAssignWithType(i)
+                if (ml) {
+                    boolean ok = allow(ml.line as int, ml.column as int)
+                    Logging.log("  [scan] multi-line resolution '${word}' at ${ml.line}:${ml.column} type=${ml.type} allow=${ok}")
+                    if (ok) return ml
                 }
             }
             return null
@@ -178,6 +231,7 @@ class AstNavigator {
      * Same as findTopLevelVariableWithType but without returning a type.
      * Uses the same 4-pass bottom-up strategy plus the "prefer-latest-anywhere"
      * post-check as a guard against depth/AST misclassification.
+     * Also supports multi-line decl/assignment shapes (see above).
      */
     static Map findTopLevelVariable(String word, List<String> lines, SourceUnit unit = null) {
         if (!word) return null
@@ -190,6 +244,38 @@ class AstNavigator {
             boolean ok = !(next == '(' || next == '{')
             Logging.debug("    DEBUG: validDeclEdge(no-type) check afterVarIdx=${afterVarIdx} next='${next}' => ${ok}")
             return ok
+        }
+
+        Closure<Map> tryMultilineDeclOrAssignNoType = { int i ->
+            String text = lines[i] ?: ""
+            def nameOnly = (text =~ /(^\s*)\b${java.util.regex.Pattern.quote(word)}\b\s*[,)]?\s*$/)
+            if (nameOnly.find()) {
+                int j = i - 1
+                while (j >= 0 && (lines[j]?.trim()?.length() ?: 0) == 0) j--
+                if (j >= 0) {
+                    String prev = lines[j]?.trim() ?: ""
+                    def prevType = (prev =~ /^(def|[A-Z][A-Za-z0-9_]*(?:\s*<.*?>)?)\s*[\\,]?\s*$/)
+                    if (prevType.find()) {
+                        int col = nameOnly.start(0) + nameOnly.group(1).length()
+                        Logging.log("  [scan-ML] (no-type) matched multi-line decl for '${word}' at ${i}:${col} (prev line ${j})")
+                        return [line: i, column: col, word: word]
+                    }
+                }
+            }
+            def nameEnd = (text =~ /(^\s*)\b${java.util.regex.Pattern.quote(word)}\b\s*$/)
+            if (nameEnd.find()) {
+                int k = i + 1
+                while (k < lines.size() && (lines[k]?.trim()?.length() ?: 0) == 0) k++
+                if (k < lines.size()) {
+                    String next = lines[k]?.trim() ?: ""
+                    if (next.startsWith("=")) {
+                        int col = nameEnd.start(0) + nameEnd.group(1).length()
+                        Logging.log("  [scan-ML] (no-type) matched split assignment for '${word}' at ${i}:${col} (next line ${k} starts with '=')")
+                        return [line: i, column: col, word: word]
+                    }
+                }
+            }
+            return null
         }
 
         Closure<Map> bottomUpScan = { Closure<Boolean> allow ->
@@ -210,6 +296,14 @@ class AstNavigator {
                     boolean ok = allow(i, c)
                     Logging.log("  [scan] assign '${word}' at ${i}:${c} depth=${braceDepths ? braceDepths[i] : 'n/a'} allow=${ok}")
                     if (ok) return [line: i, column: c, word: word]
+                }
+
+                // Multi-line forms
+                def ml = tryMultilineDeclOrAssignNoType(i)
+                if (ml) {
+                    boolean ok = allow(ml.line as int, ml.column as int)
+                    Logging.log("  [scan] (no-type) multi-line resolution '${word}' at ${ml.line}:${ml.column} allow=${ok}")
+                    if (ok) return ml
                 }
             }
             return null
