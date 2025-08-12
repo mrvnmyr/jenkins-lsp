@@ -120,8 +120,131 @@ class MemberResolver {
                 return [found: false, matchAtCursor: true, debug: "${varName} (${type}) no classNode"]
             }
         } else {
-            Logging.log("No type found for ${varName}, cannot resolve ${varName}.${memberName} as a property/method")
+            // --- NEW: Map-literal key resolution for globals/locals like `ctx = [ foo: ... ]` then `ctx.foo` ---
+            Logging.log("No static type for '${varName}'. Trying map-literal key resolution for '${varName}.${memberName}'")
+            def mapKey = resolveMapKeyFromAssignment(unit, lines, varName, memberName)
+            if (mapKey) {
+                Logging.log("Map-literal key resolution succeeded for ${varName}.${memberName} at ${mapKey.line}:${mapKey.column}")
+                return [found: true, matchAtCursor: true, debug: "map ${varName}[${memberName}]", line: mapKey.line, column: mapKey.column, word: memberName]
+            }
+            Logging.log("Map-literal key resolution failed for ${varName}.${memberName}")
             return [found: false, matchAtCursor: true, debug: "no type for ${varName}"]
         }
+    }
+
+    /**
+     * Heuristic: find `varName = [ ... key: ... ]` (possibly multi-line) and return the position
+     * of `key` within that literal. We prefer the **last** top-level occurrence of the variable.
+     */
+    private static Map resolveMapKeyFromAssignment(SourceUnit unit, List<String> lines, String varName, String key) {
+        if (!lines || !varName || !key) return null
+
+        // Prefer top-level variable occurrence when present
+        def top = AstNavigator.findTopLevelVariable(varName, lines, unit)
+        if (top) {
+            Logging.log("MapKey: inspecting top-level occurrence of '${varName}' at ${top.line}:${top.column}")
+            def hit = findKeyInsideMapLiteral(lines, top.line, varName, key)
+            if (hit) return hit
+        }
+
+        // Fallback: search entire file for an assignment of the form `varName = [`
+        Logging.log("MapKey: scanning entire file for '${varName} = [' to resolve key '${key}'")
+        for (int i = lines.size() - 1; i >= 0; --i) {
+            def ln = lines[i] ?: ""
+            def assign = (ln =~ /(^|\b)${java.util.regex.Pattern.quote(varName)}\b\s*=/)
+            if (assign.find()) {
+                def hit = findKeyInsideMapLiteral(lines, i, varName, key)
+                if (hit) return hit
+            }
+        }
+        return null
+    }
+
+    /**
+     * From a candidate assignment line, try to locate a map literal region starting with '[' and
+     * search for `key:` (or '"key":' / "'key':") at top level of that literal. Returns [line,col] or null.
+     */
+    private static Map findKeyInsideMapLiteral(List<String> lines, int startLine, String varName, String key) {
+        int i = Math.max(0, Math.min(startLine, lines.size() - 1))
+        int j = i
+        int eqLine = -1
+        int bracketStartLine = -1
+        int bracketStartCol = -1
+
+        // 1) Find '=' token from the assignment line forward
+        while (j < lines.size()) {
+            String txt = lines[j] ?: ""
+            int scanFrom = 0
+            if (j == i) {
+                // Avoid matching property like x.varName = ; insist on standalone varName before '='
+                def m = (txt =~ /(^|\s)${java.util.regex.Pattern.quote(varName)}\b/)
+                if (!m.find()) {
+                    j++
+                    continue
+                }
+                scanFrom = m.end()
+            }
+            int eq = txt.indexOf('=', scanFrom)
+            if (eq >= 0) { eqLine = j; break }
+            j++
+        }
+        if (eqLine < 0) {
+            Logging.log("MapKey: no '=' found after ${varName} on/after line ${i}")
+            return null
+        }
+
+        // 2) From after '=', find first '[' starting the literal (may be same or next lines)
+        int kLine = eqLine
+        int kColFrom = (lines[eqLine] ?: "").indexOf('=', 0) + 1
+        int sqLine = -1, sqCol = -1
+        while (kLine < lines.size()) {
+            String txt = lines[kLine] ?: ""
+            int idx = (kLine == eqLine) ? kColFrom : 0
+            int cand = txt.indexOf('[', idx)
+            if (cand >= 0) { sqLine = kLine; sqCol = cand; break }
+            // stop if we hit a ';' or another assignment before finding a '[' on the same line
+            if (kLine == eqLine && txt.indexOf(';', kColFrom) >= 0) break
+            kLine++
+        }
+        if (sqLine < 0) {
+            Logging.log("MapKey: no '[' map-literal start found after '=' for ${varName} (from line ${eqLine})")
+            return null
+        }
+        bracketStartLine = sqLine
+        bracketStartCol = sqCol
+        Logging.log("MapKey: found '[' starting map for ${varName} at ${bracketStartLine}:${bracketStartCol}")
+
+        // 3) Walk forward to find matching ']' and track depth to stay at top-level (depth==1)
+        int depth = 0
+        boolean started = false
+        for (int r = bracketStartLine; r < lines.size(); r++) {
+            String txt = lines[r] ?: ""
+            for (int c = (r == bracketStartLine ? bracketStartCol : 0); c < txt.length(); c++) {
+                char ch = txt.charAt(c)
+                if (ch == '[') { depth++; started = true }
+                else if (ch == ']') { depth--; if (started && depth <= 0) { Logging.log("MapKey: end ']' for ${varName} at ${r}:${c}"); return null } }
+
+                // At top level of the map (depth==1), look for `key:` (allow quoted keys)
+                if (started && depth == 1) {
+                    // quick check only at likely key starts (beginning of token)
+                    // Pattern A:    ^\s*key\s*:
+                    def patA = (txt =~ /(^\s*)${java.util.regex.Pattern.quote(key)}\s*:/)
+                    if (patA.find()) {
+                        int col = patA.start(0) + patA.group(1).length()
+                        Logging.log("MapKey: matched unquoted key '${key}' at ${r}:${col}  line='${txt}'")
+                        return [line: r, column: col]
+                    }
+                    // Pattern B:    ^\s*["']key["']\s*:
+                    def patB = (txt =~ /(^\s*)["']${java.util.regex.Pattern.quote(key)}["']\s*:/)
+                    if (patB.find()) {
+                        int col = patB.start(0) + patB.group(1).length() + 1 /*skip opening quote*/
+                        Logging.log("MapKey: matched quoted key '${key}' at ${r}:${col}  line='${txt}'")
+                        return [line: r, column: col]
+                    }
+                }
+            }
+        }
+        Logging.log("MapKey: key '${key}' not found inside map-literal assigned to ${varName} starting at ${bracketStartLine}:${bracketStartCol}")
+        return null
     }
 }
