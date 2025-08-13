@@ -382,18 +382,26 @@ class MemberResolver {
     /**
      * Heuristic: find the last (preferably top-level) assignment `var.prop = ...`
      * and return the position of the `prop` token.
+     *
+     * Supports both `var.prop =` and `var.'prop' =`/`var."prop" =`.
      */
     private static Map resolveTopLevelPropertyAssignment(SourceUnit unit, List<String> lines, String varName, String prop) {
         if (!lines || !varName || !prop) return null
         def braceDepths = StringHeuristics.computeBraceDepths(lines)
 
+        // Accept quoted or unquoted property names and spaces around dot.
+        String quotedProp = "['\\\"]?${java.util.regex.Pattern.quote(prop)}['\\\"]?"
+        def pattern = (~/(^\s*)\b${java.util.regex.Pattern.quote(varName)}\b\s*\.\s*(${quotedProp})\s*=/)
+
         Closure<Map> scan = { Closure<Boolean> allow ->
             for (int i = lines.size() - 1; i >= 0; --i) {
                 String txt = lines[i] ?: ""
-                def rx = (~/(^\s*)\b${java.util.regex.Pattern.quote(varName)}\b\s*\.\s*(${java.util.regex.Pattern.quote(prop)})\b\s*=/)
-                def m = rx.matcher(txt)
+                def m = pattern.matcher(txt)
                 if (m.find()) {
-                    int col = m.start(2) // start of the property token
+                    // m.group(2) may include quotes; point to the start of the inner token
+                    int col = m.start(2)
+                    // If quoted, advance one to land on the identifier character.
+                    if (txt.charAt(col) == '\'' as char || txt.charAt(col) == '"' as char) col++
                     boolean ok = allow(i, col)
                     Logging.log("PropAssign: matched '${varName}.${prop} = ...' at ${i}:${col} depth=${braceDepths ? braceDepths[i] : 'n/a'} allow=${ok} txt='${txt.trim()}'")
                     if (ok) return [line: i, column: col]

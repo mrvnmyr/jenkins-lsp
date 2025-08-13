@@ -177,6 +177,9 @@ class StringHeuristics {
      *  - triple-quoted strings (''' and """)
      *  - slashy (/.../) and dollar-slashy ($/.../$) strings
      *  - // line comments and /* ... *\/ block comments
+     *
+     * NOTE: To avoid stderr pipe backpressure and related timeouts, per-character debug
+     * logs are suppressed here; we only emit a compact summary at the end.
      */
     static List<Integer> computeBraceDepths(List<String> lines) {
         def depths = []
@@ -201,30 +204,30 @@ class StringHeuristics {
 
                 // --- inside multi-line comment ---
                 if (inBlockComment) {
-                    if (ch == '*' && n1 == '/') { inBlockComment = false; j++; Logging.debug("    DEBUG: end /* */ at ${i}:${j}") }
+                    if (ch == '*' && n1 == '/') { inBlockComment = false; j++ }
                     continue
                 }
 
                 // --- inside dollar-slashy ---
                 if (inDollarSlashy) {
-                    if (ch == '/' && n1 == '\$') { inDollarSlashy = false; j++; Logging.debug("    DEBUG: end \$/ /\$ at ${i}:${j}") }
+                    if (ch == '/' && n1 == '\$') { inDollarSlashy = false; j++ }
                     continue
                 }
 
                 // --- inside slashy ---
                 if (inSlashy) {
-                    if (!escape && ch == '/') { inSlashy = false; Logging.debug("    DEBUG: end /.../ at ${i}:${j}"); continue }
+                    if (!escape && ch == '/') { inSlashy = false; continue }
                     escape = (!escape && ch == '\\')
                     continue
                 }
 
                 // --- inside triple quotes ---
                 if (inTqDq) {
-                    if (ch == '"' && n1 == '"' && n2 == '"') { inTqDq = false; j += 2; Logging.debug("    DEBUG: end \"\"\" at ${i}:${j}") }
+                    if (ch == '"' && n1 == '"' && n2 == '"') { inTqDq = false; j += 2 }
                     continue
                 }
                 if (inTqSq) {
-                    if (ch == '\'' && n1 == '\'' && n2 == '\'') { inTqSq = false; j += 2; Logging.debug("    DEBUG: end ''' at ${i}:${j}") }
+                    if (ch == '\'' && n1 == '\'' && n2 == '\'') { inTqSq = false; j += 2 }
                     continue
                 }
 
@@ -244,12 +247,12 @@ class StringHeuristics {
                 // line comment
                 if (ch == '/' && n1 == '/') break
                 // block comment
-                if (ch == '/' && n1 == '*') { inBlockComment = true; j++; Logging.debug("    DEBUG: start /* at ${i}:${j-1}"); continue }
+                if (ch == '/' && n1 == '*') { inBlockComment = true; j++; continue }
                 // dollar-slashy start
-                if (ch == '\$' && n1 == '/') { inDollarSlashy = true; j++; Logging.debug("    DEBUG: start \$/ at ${i}:${j-1}"); continue }
+                if (ch == '\$' && n1 == '/') { inDollarSlashy = true; j++; continue }
                 // triple quotes
-                if (ch == '"' && n1 == '"' && n2 == '"') { inTqDq = true; j += 2; Logging.debug("    DEBUG: start \"\"\" at ${i}:${j-2}"); continue }
-                if (ch == '\'' && n1 == '\'' && n2 == '\'') { inTqSq = true; j += 2; Logging.debug("    DEBUG: start ''' at ${i}:${j-2}"); continue }
+                if (ch == '"' && n1 == '"' && n2 == '"') { inTqDq = true; j += 2; continue }
+                if (ch == '\'' && n1 == '\'' && n2 == '\'') { inTqSq = true; j += 2; continue }
                 // slashy start (improved heuristic: avoid division like a/b)
                 if (ch == '/' && n1 != '/' && n1 != '*') {
                     // look behind for a token that typically ends an expression
@@ -264,10 +267,7 @@ class StringHeuristics {
                     }
                     if (!looksLikeDivision) {
                         inSlashy = true
-                        Logging.debug("    DEBUG: start /.../ at ${i}:${j}")
                         continue
-                    } else {
-                        Logging.debug("    DEBUG: '/' treated as division at ${i}:${j}")
                     }
                 }
                 // normal quotes
@@ -279,7 +279,7 @@ class StringHeuristics {
                 else if (ch == '}') depth = Math.max(0, depth - 1)
             }
         }
-        // Keep logs lightweight to avoid blocking on stderr pipes
+        // Compact summary only (avoid flooding stderr)
         int n = depths.size()
         def head = depths.take(20)
         Logging.debug("    DEBUG: computeBraceDepths size=${n}, head=${head}${n>20?'...':''}")

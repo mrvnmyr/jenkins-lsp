@@ -22,7 +22,7 @@ class LspServer {
     void run() {
         while (true) {
             def message = transport.readMessage()
-            Logging.log("Received message: " + JsonOutput.toJson(message))
+            Logging.log("Received message: " + JsonOutput.toJson(message?.method ?: "<null>"))
             if (!message) continue
             try {
                 switch (message.method) {
@@ -78,8 +78,8 @@ class LspServer {
             message.params?.contentChanges?.getAt(0)?.text
 
         Logging.log("Changed document: ${uri}")
-        Logging.log("Full content received:")
-        Logging.log(content ?: "<empty>")
+        // Avoid dumping the whole file to stderr which can block under heavy I/O.
+        Logging.debug("  Content length: ${(content ?: '').length()} chars")
 
         def pr = Parser.parseGroovy(content ?: "")
         this.lastParsedUnit = pr.unit
@@ -265,10 +265,6 @@ class LspServer {
                         break
                     }
                 }
-            }
-            Logging.log("All top-level AST.methods:")
-            for (method in lastParsedUnit.AST.methods) {
-                Logging.log("  Method: ${method.name} [${method.lineNumber}-${method.lastLineNumber}]")
             }
 
             def locals = [:]
