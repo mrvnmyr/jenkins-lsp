@@ -16,8 +16,8 @@ class MemberResolver {
      * or null, or {found:false,matchAtCursor:true,...} when the pattern is at cursor but couldn't resolve.
      */
     static Map resolveQualifiedProperty(SourceUnit unit, List<String> lines, int lineNum, int charNum, String lineText) {
-        // Allow optional whitespace after the dot so "ctx.  foo" still counts.
-        def m = (lineText =~ /(\b\w+)\.\s*([A-Za-z_][A-Za-z0-9_]*)\b/)
+        // Allow optional whitespace both BEFORE and AFTER the dot so "ctx .  foo" counts.
+        def m = (lineText =~ /(\b\w+)\s*\.\s*([A-Za-z_][A-Za-z0-9_]*)\b/)
         boolean foundAtCursor = false
         int foundStart = -1
         int foundEnd = -1
@@ -26,15 +26,20 @@ class MemberResolver {
         while (m.find()) {
             int propStart = m.start(2)   // start of member name
             int propEnd = m.end(2)       // end of member name (exclusive)
-            // index of the '.' between qualifier and member (no whitespace inside group(1))
-            int dotIndex = m.start(1) + (m.group(1)?.length() ?: 0)
+
+            // index of '.' between qualifier and member; account for optional whitespace before '.'
+            int qStart = m.start(1)
+            int qEnd   = m.end(1)
+            int dotIndex = lineText.indexOf('.', qEnd) // first '.' after qualifier
+
             // Treat cursor as "on this qualified access" when:
             //   - it's on any character of the member token, OR
             //   - it's exactly on the '.', OR
             //   - it's in the whitespace region between '.' and the member start.
             boolean onMember = (charNum >= propStart && charNum < propEnd)
-            boolean onDot = (charNum == dotIndex)
-            boolean inWsAfterDot = (charNum > dotIndex && charNum < propStart)
+            boolean onDot = (dotIndex >= 0 && charNum == dotIndex)
+            boolean inWsAfterDot = (dotIndex >= 0 && charNum > dotIndex && charNum < propStart)
+
             if (onMember || onDot || inWsAfterDot) {
                 foundAtCursor = true
                 foundStart = m.start()
@@ -42,13 +47,19 @@ class MemberResolver {
                 memberStart = propStart
                 varName = m.group(1)
                 memberName = m.group(2)
-                Logging.log("Qualified pattern at cursor: '${varName}.${memberName}'  dotIndex=${dotIndex} propStart=${propStart} propEnd=${propEnd} charNum=${charNum}  flags(onMember=${onMember},onDot=${onDot},inWs=${inWsAfterDot})")
+                Logging.log("Qualified pattern at cursor: '${varName}.${memberName}'  dotIndex=${dotIndex} " +
+                            "propStart=${propStart} propEnd=${propEnd} charNum=${charNum} " +
+                            "flags(onMember=${onMember},onDot=${onDot},inWs=${inWsAfterDot})")
                 break
             } else {
-                Logging.debug("    DEBUG: skip qualified '${m.group(1)}.${m.group(2)}' for cursor ${charNum} (range ${propStart}-${propEnd}, dot=${dotIndex})")
+                Logging.debug("    DEBUG: skip qualified '${m.group(1)}.${m.group(2)}' for cursor ${charNum} " +
+                              "(member ${propStart}-${propEnd}, dot=${dotIndex}, qualifier ${qStart}-${qEnd})")
             }
         }
-        if (!foundAtCursor) return null
+        if (!foundAtCursor) {
+            Logging.debug("    DEBUG: resolveQualifiedProperty: no qualified pattern at cursor on line ${lineNum}")
+            return null
+        }
 
         boolean isMethodCall = false
         // consider whitespace between name and '('
@@ -108,6 +119,8 @@ class MemberResolver {
                     type = topVar.type
                     Logging.log("    Type of top-level ${varName} from decl: ${type}")
                 }
+            } else {
+                Logging.log("    Top-level variable '${varName}' not found by AST/heuristics; will try dynamic map/property scans.")
             }
         }
 
@@ -146,6 +159,40 @@ class MemberResolver {
                 Logging.log("Property-assignment resolution succeeded for ${varName}.${memberName} at ${propAssign.line}:${propAssign.column}")
                 return [found: true, matchAtCursor: true, debug: "assign ${varName}.${memberName}", line: propAssign.line, column: propAssign.column, word: memberName]
             }
+
+            // Final ultra-relaxed fallback: if we still didn't find a key, try locating the
+            // last bare top-level `memberName:` that appears within any `varName = [ ... ]`
+            // region, even if earlier scans missed due to unusual spacing.
+            try {
+                def top = AstNavigator.findTopLevelVariable(varName, lines, unit)
+                if (top) {
+                    // Search a bounded window (next 200 lines) after the assignment for a bare key:
+                    int start = Math.max(0, top.line)
+                    int end = Math.min(lines.size() - 1, start + 200)
+                    int depth = 0
+                    boolean seenBracket = false
+                    for (int r = start; r <= end; r++) {
+                        String txt = lines[r] ?: ""
+                        for (int c = 0; c < txt.length(); c++) {
+                            char ch = txt.charAt(c)
+                            if (ch == '[') { depth++; seenBracket = true }
+                            else if (ch == ']') { depth = Math.max(0, depth - 1) }
+                            if (seenBracket && depth == 1) {
+                                def pat = (txt =~ /(^\s*)(${java.util.regex.Pattern.quote(memberName)})\s*:/)
+                                if (pat.find()) {
+                                    int col = (pat.start(2))
+                                    Logging.log("Relaxed map-key scan matched '${memberName}:' at ${r}:${col}")
+                                    return [found: true, matchAtCursor: true, debug: "relaxed map ${varName}[${memberName}]", line: r, column: col, word: memberName]
+                                }
+                            }
+                        }
+                        if (seenBracket && depth == 0) break
+                    }
+                }
+            } catch (Throwable t) {
+                Logging.log("Relaxed map-key fallback failed: ${t.class.name}: ${t.message}")
+            }
+
             Logging.log("Dynamic resolution failed for ${varName}.${memberName}")
             return [found: false, matchAtCursor: true, debug: "no type for ${varName}"]
         }
