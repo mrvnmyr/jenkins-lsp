@@ -33,14 +33,25 @@ class MemberResolver {
             int dotIndex = lineText.indexOf('.', qEnd) // first '.' after qualifier
 
             // Treat cursor as "on this qualified access" when:
-            //   - it's on any character of the member token, OR
+            //   - it's on any character of the member token,
+            //   - it's exactly on the **end** of the member token (common caret placement),
             //   - it's exactly on the '.', OR
             //   - it's in the whitespace region between '.' and the member start.
             boolean onMember = (charNum >= propStart && charNum < propEnd)
+            boolean atTokenEnd = (charNum == propEnd)
+            // Safe to accept the caret at token end when the next char doesn't continue an identifier
+            // (or token ends the line).
+            char chAfter = (propEnd < (lineText?.length() ?: 0)) ? lineText.charAt(propEnd) : '\u0000'
+            boolean onMemberEnd = atTokenEnd && !Character.isJavaIdentifierPart(chAfter)
             boolean onDot = (dotIndex >= 0 && charNum == dotIndex)
             boolean inWsAfterDot = (dotIndex >= 0 && charNum > dotIndex && charNum < propStart)
 
-            if (onMember || onDot || inWsAfterDot) {
+            Logging.debug("    DEBUG: qualified token '${m.group(1)}.${m.group(2)}' "
+                          + "ranges(q=${qStart}-${qEnd}, m=${propStart}-${propEnd}), "
+                          + "cursor=${charNum}, flags(onMember=${onMember}, onMemberEnd=${onMemberEnd}, "
+                          + "onDot=${onDot}, inWsAfterDot=${inWsAfterDot}, chAfter='${chAfter}')")
+
+            if (onMember || onMemberEnd || onDot || inWsAfterDot) {
                 foundAtCursor = true
                 foundStart = m.start()
                 foundEnd = m.end()
@@ -49,7 +60,7 @@ class MemberResolver {
                 memberName = m.group(2)
                 Logging.log("Qualified pattern at cursor: '${varName}.${memberName}'  dotIndex=${dotIndex} " +
                             "propStart=${propStart} propEnd=${propEnd} charNum=${charNum} " +
-                            "flags(onMember=${onMember},onDot=${onDot},inWs=${inWsAfterDot})")
+                            "flags(onMember=${onMember},onMemberEnd=${onMemberEnd},onDot=${onDot},inWs=${inWsAfterDot})")
                 break
             } else {
                 Logging.debug("    DEBUG: skip qualified '${m.group(1)}.${m.group(2)}' for cursor ${charNum} " +
@@ -182,7 +193,7 @@ class MemberResolver {
                                 if (pat.find()) {
                                     int col = (pat.start(2))
                                     Logging.log("Relaxed map-key scan matched '${memberName}:' at ${r}:${col}")
-                                    return [found: true, matchAtCursor: true, debug: "relaxed map ${varName}[${memberName}]", line: r, column: col, word: memberName]
+                                    return [line: r, column: col]
                                 }
                             }
                         }
