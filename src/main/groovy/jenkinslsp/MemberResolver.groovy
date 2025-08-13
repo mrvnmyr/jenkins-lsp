@@ -135,6 +135,14 @@ class MemberResolver {
             }
         }
 
+        // If the "type" is just 'def' or 'Object', treat as no static type (so we can try dynamic scans)
+        if (type == "def" || type == "java.lang.Object") {
+            Logging.log("    Declared type for ${varName} is '${type}', treating as dynamic.")
+            type = null
+        }
+
+        // If we have a concrete type, try to resolve using that type *only if* the class lives in this unit.
+        // Otherwise, fall back to dynamic (useful for Map/LinkedHashMap/etc. declared types).
         if (type) {
             def classNode = null
             for (cls in unit.AST.classes) {
@@ -150,63 +158,63 @@ class MemberResolver {
                     return [found: true, matchAtCursor: true, debug: "${varName}.${memberName}->${type}", line: res.line, column: res.column, word: memberName]
                 } else {
                     Logging.log("${varName}.${memberName} could not be resolved on class ${type}")
-                    return [found: false, matchAtCursor: true, debug: "${varName}.${memberName} not found in ${type}"]
+                    // DO NOT bail out: try dynamic fallbacks below
                 }
             } else {
-                Logging.log("No classNode found for ${type} (${varName})")
-                return [found: false, matchAtCursor: true, debug: "${varName} (${type}) no classNode"]
+                Logging.log("No classNode found for declared type '${type}' on ${varName}; falling back to dynamic scans.")
+                // continue to dynamic fallbacks
             }
-        } else {
-            // --- Map-style & dynamic heuristics ---
-            Logging.log("No static type for '${varName}'. Trying map-literal key resolution for '${varName}.${memberName}'")
-            def mapKey = resolveMapKeyFromAssignment(unit, lines, varName, memberName)
-            if (mapKey) {
-                Logging.log("Map-literal key resolution succeeded for ${varName}.${memberName} at ${mapKey.line}:${mapKey.column}")
-                return [found: true, matchAtCursor: true, debug: "map ${varName}[${memberName}]", line: mapKey.line, column: mapKey.column, word: memberName]
-            }
-            Logging.log("Map-literal key resolution failed for ${varName}.${memberName}; trying property assignment scan")
-            def propAssign = resolveTopLevelPropertyAssignment(unit, lines, varName, memberName)
-            if (propAssign) {
-                Logging.log("Property-assignment resolution succeeded for ${varName}.${memberName} at ${propAssign.line}:${propAssign.column}")
-                return [found: true, matchAtCursor: true, debug: "assign ${varName}.${memberName}", line: propAssign.line, column: propAssign.column, word: memberName]
-            }
+        }
 
-            // Final ultra-relaxed fallback: if we still didn't find a key, try locating the
-            // last bare top-level `memberName:` that appears within any `varName = [ ... ]`
-            // region, even if earlier scans missed due to unusual spacing.
-            try {
-                def top = AstNavigator.findTopLevelVariable(varName, lines, unit)
-                if (top) {
-                    // Search a bounded window (next 200 lines) after the assignment for a bare key:
-                    int start = Math.max(0, top.line)
-                    int end = Math.min(lines.size() - 1, start + 200)
-                    int depth = 0
-                    boolean seenBracket = false
-                    for (int r = start; r <= end; r++) {
-                        String txt = lines[r] ?: ""
-                        for (int c = 0; c < txt.length(); c++) {
-                            char ch = txt.charAt(c)
-                            if (ch == '[') { depth++; seenBracket = true }
-                            else if (ch == ']') { depth = Math.max(0, depth - 1) }
-                            if (seenBracket && depth == 1) {
-                                def pat = (txt =~ /(^\s*)(${java.util.regex.Pattern.quote(memberName)})\s*:/)
-                                if (pat.find()) {
-                                    int col = (pat.start(2))
-                                    Logging.log("Relaxed map-key scan matched '${memberName}:' at ${r}:${col}")
-                                    return [line: r, column: col]
-                                }
+        // --- Map-style & dynamic heuristics ---
+        Logging.log("No usable static type for '${varName}'. Trying map-literal key resolution for '${varName}.${memberName}'")
+        def mapKey = resolveMapKeyFromAssignment(unit, lines, varName, memberName)
+        if (mapKey) {
+            Logging.log("Map-literal key resolution succeeded for ${varName}.${memberName} at ${mapKey.line}:${mapKey.column}")
+            return [found: true, matchAtCursor: true, debug: "map ${varName}[${memberName}]", line: mapKey.line, column: mapKey.column, word: memberName]
+        }
+        Logging.log("Map-literal key resolution failed for ${varName}.${memberName}; trying property assignment scan")
+        def propAssign = resolveTopLevelPropertyAssignment(unit, lines, varName, memberName)
+        if (propAssign) {
+            Logging.log("Property-assignment resolution succeeded for ${varName}.${memberName} at ${propAssign.line}:${propAssign.column}")
+            return [found: true, matchAtCursor: true, debug: "assign ${varName}.${memberName}", line: propAssign.line, column: propAssign.column, word: memberName]
+        }
+
+        // Final ultra-relaxed fallback: if we still didn't find a key, try locating the
+        // last bare top-level `memberName:` that appears within any `varName = [ ... ]`
+        // region, even if earlier scans missed due to unusual spacing.
+        try {
+            def top = AstNavigator.findTopLevelVariable(varName, lines, unit)
+            if (top) {
+                // Search a bounded window (next 200 lines) after the assignment for a bare key:
+                int start = Math.max(0, top.line)
+                int end = Math.min(lines.size() - 1, start + 200)
+                int depth = 0
+                boolean seenBracket = false
+                for (int r = start; r <= end; r++) {
+                    String txt = lines[r] ?: ""
+                    for (int c = 0; c < txt.length(); c++) {
+                        char ch = txt.charAt(c)
+                        if (ch == '[') { depth++; seenBracket = true }
+                        else if (ch == ']') { depth = Math.max(0, depth - 1) }
+                        if (seenBracket && depth == 1) {
+                            def pat = (txt =~ /(^\s*)(${java.util.regex.Pattern.quote(memberName)})\s*:/)
+                            if (pat.find()) {
+                                int col = (pat.start(2))
+                                Logging.log("Relaxed map-key scan matched '${memberName}:' at ${r}:${col}")
+                                return [line: r, column: col]
                             }
                         }
-                        if (seenBracket && depth == 0) break
                     }
+                    if (seenBracket && depth == 0) break
                 }
-            } catch (Throwable t) {
-                Logging.log("Relaxed map-key fallback failed: ${t.class.name}: ${t.message}")
             }
-
-            Logging.log("Dynamic resolution failed for ${varName}.${memberName}")
-            return [found: false, matchAtCursor: true, debug: "no type for ${varName}"]
+        } catch (Throwable t) {
+            Logging.log("Relaxed map-key fallback failed: ${t.class.name}: ${t.message}")
         }
+
+        Logging.log("Dynamic resolution failed for ${varName}.${memberName}")
+        return [found: false, matchAtCursor: true, debug: "no type for ${varName}"]
     }
 
     /**
