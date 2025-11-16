@@ -6,12 +6,25 @@ package jenkinslsp
  * Intentionally tiny API to avoid accidental coupling.
  */
 class Logging {
+    private static final boolean DEBUG_ENABLED
+
+    static {
+        String v = System.getenv("DEBUG")
+        DEBUG_ENABLED = (v != null && v.trim().length() > 0 && !"0".equals(v.trim()))
+    }
+
     static void log(Object msg) {
-        System.err.println("[groovy-lsp] ${String.valueOf(msg)}")
+        System.err.println("[groovy-lsp] " + String.valueOf(msg))
     }
 
     static void debug(Object msg) {
-        // Same channel; distinct helper if you ever want to gate verbosity
-        System.err.println("[groovy-lsp] ${String.valueOf(msg)}")
+        if (!DEBUG_ENABLED) {
+            return
+        }
+        System.err.println("[groovy-lsp] " + String.valueOf(msg))
+    }
+
+    static boolean isDebugEnabled() {
+        return DEBUG_ENABLED
     }
 }
