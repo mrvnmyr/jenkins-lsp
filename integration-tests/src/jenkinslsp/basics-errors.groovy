@@ -17,3 +17,22 @@ String methodReturnWrongType() {
 def methodReturnUnknownIdentifier() {
     return fffffffff
 }
+
+String insufficientIfReturn(String s) {
+    if (s) {
+        return "TRUE"
+    }
+}
+
+String insufficientSwitchReturn(String s) {
+    switch (s) {
+    case "foo":
+        return "foo"
+        break;
+    case "bar":
+        return "bar"
+        break;
+    default:
+        break;
+    }
+}

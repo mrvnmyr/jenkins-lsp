@@ -364,6 +364,11 @@ LspTestClient.run(lspCmd, debug){ def client ->
 
     def tuBasicsErrors = client.loadTestUnit("./integration-tests/src/jenkinslsp/basics-errors.groovy") 
     tuBasicsErrors.assertDiagnostic(msg: """{message=Method 'methodMissingReturn' declares return type 'String' but does not return anything, range={end={character=1, line=10}, start={character=0, line=10}}, severity=1, source=groovy-lsp}""", test: "methods with false/missing return values/types")
+    tuBasicsErrors.assertDiagnostic(msg: """{message=Method 'insufficientIfReturn' declares return type 'String' but does not return anything, range={end={character=1, line=20}, start={character=0, line=20}}, severity=1, source=groovy-lsp}""", test: "methods with false/missing return values/types")
+    tuBasicsErrors.assertDiagnostic(msg: """{message=Method 'insufficientSwitchReturn' declares return type 'String' but does not return anything, range={end={character=1, line=26}, start={character=0, line=26}}, severity=1, source=groovy-lsp}""", test: "methods with false/missing return values/types")
+
+    def tuNoErrors = client.loadTestUnit("./integration-tests/src/jenkinslsp/no-errors.groovy") 
+    tuNoErrors.assertNoDiagnostic()
 
     def tuVarsGlobalVariable = client.loadTestUnit("./integration-tests/vars/global-variable.groovy") 
     tuVarsGlobalVariable.assertGoto(from: "69:1", to: "39:5", test: "resolving 'def call(Map args=[:], Closure cb)'")
