@@ -9,8 +9,8 @@
 // RESERVED
 def ctx = [
     foo: "foobar",
+    bar: [ baz: 999 ],
 ]
-// RESERVED
 // RESERVED
 // RESERVED
 // RESERVED
@@ -26,5 +26,5 @@ folder(somedir) {
 }
 
 multibranchPipelineJob("$somedir/$somerepo") {
-    displayName(ctx.foo)
+    displayName(ctx.foo + ctx.bar.baz)
 }
