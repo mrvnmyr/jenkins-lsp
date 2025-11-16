@@ -1,0 +1,46 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Publish release artifact"
+        required: false
+        default: "false"
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - uses: prefix-dev/setup-pixi@v0.8.3
+        with:
+          pixi-version: v0.41.4
+          cache: true
+
+      - name: Run build
+        run: pixi run build
+
+      - name: Publish Release (if publish flag is true)
+        if: ${{ github.event.inputs.publish == 'true' }}
+        uses: softprops/action-gh-release@v1
+        with:
+          files: ./target/jenkins-lsp-1.0.0-all.jar
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
