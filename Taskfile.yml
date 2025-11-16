@@ -21,7 +21,7 @@ tasks:
     cmds:
       - java -jar ./target/jenkins-lsp-1.0.0-all.jar
 
-  test:
+  tests:
     deps: [build]
     cmds:
       - ./integration-tests.groovy {{.CLI_ARGS}}

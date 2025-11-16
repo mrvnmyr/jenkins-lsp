@@ -1,0 +1,18 @@
+[workspace]
+name = "jenkins-lsp"
+authors = ["Jenkin-LSP Team"]
+version = "0.0.0"
+channels = [
+    "conda-forge",
+]
+
+platforms = ["linux-64", "win-64", "osx-64", "osx-arm64"]
+
+[tasks]
+"build" = { cmd = ["go-task", "build"] }
+"tests" = { cmd = ["go-task", "tests"] }
+
+[dependencies]
+"go-task" = "3.45.*"
+"maven" = "3.9.*"
+"openjdk" = "17.*"
