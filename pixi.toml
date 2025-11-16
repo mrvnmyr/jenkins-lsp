@@ -9,8 +9,8 @@ channels = [
 platforms = ["linux-64", "win-64", "osx-64", "osx-arm64"]
 
 [tasks]
-"build" = { cmd = ["go-task", "build"] }
-"tests" = { cmd = ["go-task", "tests"] }
+"build" = { cmd = ["task", "build"] }
+"tests" = { cmd = ["task", "tests"] }
 
 [dependencies]
 "go-task" = "3.45.*"
