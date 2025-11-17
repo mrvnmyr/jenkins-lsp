@@ -5,12 +5,12 @@ on:
   pull_request:
     branches: [main]
     types: [opened, synchronize, reopened]
-  workflow_dispatch:
-    inputs:
-      publish:
-        description: 'Publish release artifact'
-        required: false
-        default: 'false'
+  # workflow_dispatch:
+  #   inputs:
+  #     publish:
+  #       description: 'Publish release artifact'
+  #       required: false
+  #       default: 'false'
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -36,17 +36,17 @@ jobs:
       - name: Run build
         run: pixi run build
 
-      - name: Create Git tag for release (if publish flag is true)
-        if: ${{ github.event.inputs.publish == 'true' }}
-        run: |
-          TAG="v1.0.0"
-          git tag $TAG
-          git push origin $TAG
+      # - name: Create Git tag for release (if publish flag is true)
+      #   if: ${{ github.event.inputs.publish == 'true' }}
+      #   run: |
+      #     TAG="v1.0.0"
+      #     git tag $TAG
+      #     git push origin $TAG
 
-      - name: Publish Release (if publish flag is true)
-        if: ${{ github.event.inputs.publish == 'true' }}
-        uses: softprops/action-gh-release@v1
-        with:
-          files: ./target/jenkins-lsp-1.0.0-all.jar
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # - name: Publish Release (if publish flag is true)
+      #   if: ${{ github.event.inputs.publish == 'true' }}
+      #   uses: softprops/action-gh-release@v1
+      #   with:
+      #     files: ./target/jenkins-lsp-1.0.0-all.jar
+      #   env:
+      #     GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
