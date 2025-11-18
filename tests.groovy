@@ -401,6 +401,9 @@ LspTestClient.run(lspCmd, debug){ def client ->
     tuBasicsErrors.assertDiagnostic(msg: """{message=Method 'methodMissingReturn' declares return type 'String' but does not return anything, range={end={character=1, line=10}, start={character=0, line=10}}, severity=1, source=groovy-lsp}""", test: "methods with false/missing return values/types")
     tuBasicsErrors.assertDiagnostic(msg: """{message=Method 'insufficientIfReturn' declares return type 'String' but does not return anything, range={end={character=1, line=20}, start={character=0, line=20}}, severity=1, source=groovy-lsp}""", test: "methods with false/missing return values/types")
     tuBasicsErrors.assertDiagnostic(msg: """{message=Method 'insufficientSwitchReturn' declares return type 'String' but does not return anything, range={end={character=1, line=26}, start={character=0, line=26}}, severity=1, source=groovy-lsp}""", test: "methods with false/missing return values/types")
+    tuBasicsErrors.assertDiagnostic(msg: """{message=Method 'needsTwoArgs' requires at least 2 arguments but 1 was provided, range={end={character=1, line=45}, start={character=0, line=45}}, severity=1, source=groovy-lsp}""", test: "detect missing positional args for known arity")
+    tuBasicsErrors.assertDiagnostic(msg: """{message=Method 'needsOneArg' requires at least 1 argument but 0 were provided, range={end={character=1, line=46}, start={character=0, line=46}}, severity=1, source=groovy-lsp}""", test: "detect missing positional args for known arity")
+    tuBasicsErrors.assertDiagnostic(msg: """{message=Method 'expectThree' requires at least 3 arguments but 2 were provided, range={end={character=9, line=52}, start={character=8, line=52}}, severity=1, source=groovy-lsp}""", test: "detect missing arguments inside class methods")
 
     def tuNoErrors = client.loadTestUnit("./tests/src/jenkinslsp/no-errors.groovy")
     tuNoErrors.assertNoDiagnostic()

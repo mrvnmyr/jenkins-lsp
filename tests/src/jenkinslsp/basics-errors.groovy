@@ -36,3 +36,22 @@ String insufficientSwitchReturn(String s) {
         break;
     }
 }
+
+String needsTwoArgs(String first, String second) {
+    return first + second
+}
+
+void needsOneArg(String only) {}
+
+needsTwoArgs("just-one")
+needsOneArg()
+
+class ArityHelper {
+    void expectThree(String a, String b, String c) {}
+
+    void trigger() {
+        expectThree("one", "two")
+    }
+}
+
+new ArityHelper().trigger()

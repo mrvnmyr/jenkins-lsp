@@ -1,15 +1,24 @@
 package jenkinslsp
 
 import groovy.json.JsonOutput
+import groovy.lang.GroovyClassLoader
+import org.codehaus.groovy.ast.ClassNode
+import org.codehaus.groovy.ast.CodeVisitorSupport
 import org.codehaus.groovy.ast.MethodNode
+import org.codehaus.groovy.ast.Parameter
+import org.codehaus.groovy.ast.expr.ArgumentListExpression
+import org.codehaus.groovy.ast.expr.Expression
+import org.codehaus.groovy.ast.expr.MethodCallExpression
+import org.codehaus.groovy.ast.expr.TupleExpression
+import org.codehaus.groovy.ast.expr.VariableExpression
 import org.codehaus.groovy.ast.stmt.*
 import org.codehaus.groovy.control.CompilationFailedException
-import org.codehaus.groovy.control.SourceUnit
 import org.codehaus.groovy.control.CompilerConfiguration
-import groovy.lang.GroovyClassLoader
+import org.codehaus.groovy.control.SourceUnit
 import org.codehaus.groovy.control.messages.SyntaxErrorMessage
 
 import java.util.Collections
+import java.util.LinkedHashMap
 
 /**
  * Parses Groovy source text with Groovy 2.5.x APIs and produces diagnostics.
@@ -89,6 +98,7 @@ class Parser {
                     Logging.debug("    DEBUG: method '${method.name}' considered as having a return on all paths or being void")
                 }
             }
+            addMissingArgumentDiagnostics(unit, diagnostics)
         } catch (CompilationFailedException e) {
             def messages = e.getErrorCollector().getErrors()
             for (msg in messages) {
@@ -240,5 +250,132 @@ class Parser {
         // Any other statement (expression, declaration, etc.) is treated as
         // completing normally without forcing a return.
         return new FlowResult(false, true)
+    }
+
+    private static void addMissingArgumentDiagnostics(SourceUnit unit, List<Map> diagnostics) {
+        if (!unit?.AST) return
+        Map<String, List<MethodSignature>> scriptSignatures = buildSignatureMap(unit.AST.methods ?: Collections.emptyList())
+        if (!scriptSignatures.isEmpty()) {
+            MethodCallArityVisitor scriptVisitor = new MethodCallArityVisitor(scriptSignatures, diagnostics)
+            try {
+                unit.AST.statementBlock?.visit(scriptVisitor)
+            } catch (Throwable ignore) {}
+            for (MethodNode method : unit.AST.methods ?: Collections.emptyList()) {
+                if (method?.isScriptBody()) continue
+                try {
+                    method.code?.visit(scriptVisitor)
+                } catch (Throwable ignore) {}
+            }
+        }
+        for (ClassNode cls : unit.AST.classes ?: Collections.emptyList()) {
+            if (cls?.isScript()) continue
+            Map<String, List<MethodSignature>> classSignatures = buildSignatureMap(cls?.methods ?: Collections.emptyList())
+            if (classSignatures.isEmpty()) continue
+            MethodCallArityVisitor classVisitor = new MethodCallArityVisitor(classSignatures, diagnostics)
+            for (MethodNode method : cls.methods ?: Collections.emptyList()) {
+                try {
+                    method.code?.visit(classVisitor)
+                } catch (Throwable ignore) {}
+            }
+        }
+    }
+
+    private static Map<String, List<MethodSignature>> buildSignatureMap(List<MethodNode> methods) {
+        Map<String, List<MethodSignature>> map = new LinkedHashMap<>()
+        for (MethodNode method : methods ?: Collections.emptyList()) {
+            if (!method?.name) continue
+            int line = method.lineNumber ?: -1
+            if (line < 0) continue
+            map.computeIfAbsent(method.name) { [] as List<MethodSignature> } << new MethodSignature(method)
+        }
+        return map
+    }
+
+    private static class MethodSignature {
+        final int requiredArgs
+
+        MethodSignature(MethodNode node) {
+            Parameter[] params = node?.parameters ?: Parameter.EMPTY_ARRAY
+            int required = 0
+            for (Parameter p : params) {
+                if (p == null) continue
+                boolean optional = p.hasInitialExpression()
+                if (!optional) {
+                    required++
+                }
+            }
+            this.requiredArgs = required
+        }
+
+        boolean accepts(int actual) {
+            return actual >= requiredArgs
+        }
+    }
+
+    private static class MethodCallArityVisitor extends CodeVisitorSupport {
+        private final Map<String, List<MethodSignature>> methodSignatures
+        private final List<Map> diagnostics
+
+        MethodCallArityVisitor(Map<String, List<MethodSignature>> methodSignatures, List<Map> diagnostics) {
+            this.methodSignatures = methodSignatures ?: Collections.emptyMap()
+            this.diagnostics = diagnostics ?: Collections.emptyList()
+        }
+
+        @Override
+        void visitMethodCallExpression(MethodCallExpression call) {
+            try {
+                checkCall(call)
+            } catch (Throwable ignore) {}
+            super.visitMethodCallExpression(call)
+        }
+
+        private void checkCall(MethodCallExpression call) {
+            if (!call) return
+            if (methodSignatures.isEmpty()) return
+            if (!isImplicitReceiver(call)) return
+            String methodName = call.methodAsString
+            if (!methodName) return
+            List<MethodSignature> signatures = methodSignatures.get(methodName)
+            if (!signatures) return
+            int actual = countArguments(call.arguments)
+            if (actual < 0) return
+            boolean ok = signatures.any { sig -> sig.accepts(actual) }
+            if (ok) return
+            int required = signatures.collect { it.requiredArgs }.min() ?: 0
+            diagnostics << [
+                message: buildMessage(methodName, required, actual),
+                line: Math.max(0, (call.lineNumber ?: 1) - 1),
+                column: Math.max(0, (call.columnNumber ?: 1) - 1)
+            ]
+        }
+
+        private static int countArguments(Expression args) {
+            if (args == null || args == MethodCallExpression.NO_ARGUMENTS) return 0
+            if (args instanceof ArgumentListExpression) {
+                return ((ArgumentListExpression) args).expressions?.size() ?: 0
+            }
+            if (args instanceof TupleExpression) {
+                return ((TupleExpression) args).expressions?.size() ?: 0
+            }
+            return 1
+        }
+
+        private static boolean isImplicitReceiver(MethodCallExpression call) {
+            if (call.isImplicitThis()) return true
+            Expression obj = call.objectExpression
+            if (obj instanceof VariableExpression) {
+                VariableExpression var = (VariableExpression) obj
+                if (var.isThisExpression()) return true
+                return var.name == "this"
+            }
+            return false
+        }
+
+        private static String buildMessage(String methodName, int required, int actual) {
+            String reqText = "${required} argument" + (required == 1 ? "" : "s")
+            String actualText = (actual == 1 ? "1 was" : "${actual} were")
+            return "Method '${methodName}' requires at least ${reqText} but ${actualText} provided"
+        }
+
     }
 }
