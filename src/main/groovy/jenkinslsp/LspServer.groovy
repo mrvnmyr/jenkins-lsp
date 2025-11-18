@@ -2,6 +2,9 @@ package jenkinslsp
 
 import groovy.json.JsonOutput
 import org.codehaus.groovy.control.SourceUnit
+import java.io.File
+import java.io.IOException
+import java.net.URI
 
 /**
  * Minimal LSP server loop + JSON-RPC handling.
@@ -10,6 +13,11 @@ class LspServer {
     private final JsonRpcTransport transport
     private SourceUnit lastParsedUnit
     private String lastSourceText = ""
+    private String lastDocumentUri = null
+    private File lastDocumentFile = null
+    private File lastProjectRoot = null
+    private File lastVarsDirectory = null
+    private VarsSymbolIndex lastVarsIndex = VarsSymbolIndex.empty()
 
     LspServer(JsonRpcTransport transport) {
         this.transport = transport
@@ -84,6 +92,16 @@ class LspServer {
         def pr = Parser.parseGroovy(content ?: "")
         this.lastParsedUnit = pr.unit
         this.lastSourceText = pr.sourceText
+        this.lastDocumentUri = uri
+        this.lastDocumentFile = fileFromUri(uri)
+        this.lastProjectRoot = findProjectRoot(this.lastDocumentFile)
+        this.lastVarsDirectory = determineVarsDirectory(this.lastDocumentFile, this.lastProjectRoot)
+        if (this.lastVarsDirectory) {
+            Logging.log("Detected vars directory for multi-file lookup: ${this.lastVarsDirectory}")
+            this.lastVarsIndex = VarsSymbolIndex.build(this.lastVarsDirectory, this.lastDocumentFile, this.lastSourceText ?: "")
+        } else {
+            this.lastVarsIndex = VarsSymbolIndex.empty()
+        }
 
         def diagnostics = []
         for (error in pr.diagnostics) {
@@ -181,11 +199,10 @@ class LspServer {
                             ]
                         ]
                     ])
+                    return
                 } else {
-                    Logging.log("Qualified property/member lookup at cursor failed, returning null (no fallback)")
-                    transport.sendMessage([jsonrpc: "2.0", id: message.id, result: null])
+                    Logging.log("Qualified property/member lookup at cursor failed; attempting fallback resolution.")
                 }
-                return
             }
 
             // Fallback: identifier under cursor (or forced from $var)
@@ -432,6 +449,23 @@ class LspServer {
                 return
             }
 
+            def varsResult = resolveVarsDefinition(word, lineText, wordStart, wordEnd, isUnqualifiedCall, nextNonSpaceChar)
+            if (varsResult) {
+                Logging.log("Resolved '${word}' via vars lookup to ${varsResult.line}:${varsResult.column} in ${varsResult.uri}")
+                transport.sendMessage([
+                    jsonrpc: "2.0",
+                    id: message.id,
+                    result: [
+                        uri: varsResult.uri,
+                        range: [
+                            start: [line: varsResult.line, character: varsResult.column],
+                            end:   [line: varsResult.line, character: varsResult.column + (varsResult.wordLength ?: word.length())]
+                        ]
+                    ]
+                ])
+                return
+            }
+
             // Fallback: try top-level variable (e.g., if we ARE a call, or nothing else matched)
             def toplevelVar = AstNavigator.findTopLevelVariable(word, lines, lastParsedUnit)
             if (toplevelVar) {
@@ -457,6 +491,104 @@ class LspServer {
             t.printStackTrace(System.err)
             transport.sendMessage([jsonrpc: "2.0", id: message.id, result: null])
         }
+    }
+
+    private Map resolveVarsDefinition(String word, String lineText, int wordStart, int wordEnd, boolean isUnqualifiedCall, char nextNonSpaceChar) {
+        if (!word || !lastVarsIndex || !lastVarsDirectory) return null
+        try {
+            if (isUnqualifiedCall || nextNonSpaceChar == '.') {
+                def scriptInfo = lastVarsIndex.getScript(word)
+                if (scriptInfo) {
+                    Logging.log("vars lookup: treating '${word}' as script name in directory ${lastVarsDirectory}")
+                    return [uri: scriptInfo.uri, line: scriptInfo.entryPoint.line as int, column: scriptInfo.entryPoint.column as int, wordLength: word.length()]
+                }
+            }
+            String qualifier = qualifierForWord(lineText, wordStart)
+            if (qualifier) {
+                def target = lastVarsIndex.getScript(qualifier)
+                def methodLoc = target?.methodsByName?.get(word)
+                if (target && methodLoc) {
+                    Logging.log("vars lookup: resolved '${qualifier}.${word}' to ${methodLoc.line}:${methodLoc.column} in ${target.file}")
+                    return [uri: target.uri, line: methodLoc.line as int, column: methodLoc.column as int, wordLength: word.length()]
+                }
+            }
+        } catch (Throwable t) {
+            Logging.log("vars lookup failed for '${word}': ${t.class.name}: ${t.message}")
+        }
+        return null
+    }
+
+    private static String qualifierForWord(String lineText, int wordStart) {
+        if (!lineText || wordStart <= 0 || wordStart > lineText.length()) return null
+        int idx = wordStart - 1
+        while (idx >= 0 && Character.isWhitespace(lineText.charAt(idx))) idx--
+        if (idx < 0) return null
+        char sep = lineText.charAt(idx)
+        if (sep != '.' && sep != '?' && sep != '!' ) return null
+        while (idx >= 0 && (lineText.charAt(idx) == '.' || lineText.charAt(idx) == '?' || lineText.charAt(idx) == '!')) idx--
+        while (idx >= 0 && Character.isWhitespace(lineText.charAt(idx))) idx--
+        if (idx < 0) return null
+        int end = idx
+        while (idx >= 0 && Character.isJavaIdentifierPart(lineText.charAt(idx))) idx--
+        if (end >= 0 && idx < end) {
+            return lineText.substring(idx + 1, end + 1)
+        }
+        return null
+    }
+
+    private static File fileFromUri(String uri) {
+        if (!uri) return null
+        try {
+            URI u = new URI(uri)
+            if (u.scheme && !"file".equalsIgnoreCase(u.scheme)) return null
+            return new File(u)
+        } catch (Throwable t) {
+            Logging.log("Unable to convert URI to file '${uri}': ${t.class.name}: ${t.message}")
+            return null
+        }
+    }
+
+    private static File canonicalFile(File f) {
+        if (!f) return null
+        try {
+            return f.getCanonicalFile()
+        } catch (IOException ignore) {
+            return null
+        }
+    }
+
+    private File findProjectRoot(File file) {
+        File current = canonicalFile(file)?.parentFile
+        while (current) {
+            File gitDir = new File(current, ".git")
+            if (gitDir.exists()) {
+                Logging.log("Project root detected at ${current}")
+                return current
+            }
+            current = current.parentFile
+        }
+        Logging.log("Project root not found for file ${file}")
+        return null
+    }
+
+    private File determineVarsDirectory(File file, File projectRoot) {
+        File parent = file?.parentFile
+        if (!parent || parent.name != "vars") return null
+        File canonicalParent = canonicalFile(parent)
+        File canonicalRoot = canonicalFile(projectRoot)
+        if (canonicalRoot && canonicalParent && !isDescendantOrEqual(canonicalParent, canonicalRoot)) {
+            Logging.log("Ignoring vars directory at ${canonicalParent} because it is outside project root ${canonicalRoot}")
+            return null
+        }
+        return canonicalParent
+    }
+
+    private static boolean isDescendantOrEqual(File candidate, File ancestor) {
+        if (!candidate || !ancestor) return false
+        String ancestorPath = ancestor.absolutePath
+        String candidatePath = candidate.absolutePath
+        if (!ancestorPath || !candidatePath) return false
+        return candidatePath == ancestorPath || candidatePath.startsWith(ancestorPath + File.separator)
     }
 
     private void handleCompletion(Object message) {

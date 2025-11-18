@@ -1,6 +1,7 @@
 #!/usr/bin/env groovy
 import groovy.json.*
 import java.nio.charset.StandardCharsets
+import java.net.URI
 import groovy.transform.Field
 class LspTestClient {
     static List testErrors = []
@@ -28,15 +29,37 @@ class LspTestClient {
             try {
                 def from = wrangleLocation(args.from)
                 def to = wrangleLocation(args.to)
+                String expectedUri = args.targetUri
+                if (!expectedUri && args.targetFile) {
+                    File tf = new File(args.targetFile)
+                    expectedUri = uriForFile(tf)
+                }
+                if (!expectedUri) expectedUri = this.uri
                 print "[${this.name}] Asserting GoTo ($args.from) => ($args.to) "
                 def res = sendDefinition(uri, from.line, from.col)
                 assert res != null : "No definition found"
+                String actualUri = res.uri ?: this.uri
+                def normActual = normalizeUri(actualUri)
+                def normExpected = normalizeUri(expectedUri)
+                assert normActual == normExpected : "Expected definition in ${expectedUri} but got ${actualUri}"
                 def actual = [line: res.range.start.line, col: res.range.start.character]
                 assert actual.toString() == to.toString() : "Expected to resolve to ${to} but got ${actual}"
                 print " ...OK\n"
             } catch (Throwable e) {
                 testErrors << "[${this.name}] assertGoto failed: $args.from -> $args.to: While testing ${args.test}. ${e.message}"
                 println " ...FAILED"
+            }
+        }
+        private static String normalizeUri(String uri) {
+            if (!uri) return ""
+            try {
+                URI parsed = new URI(uri)
+                if (parsed.scheme?.equalsIgnoreCase("file")) {
+                    return new File(parsed).getCanonicalPath()
+                }
+                return parsed.normalize().toString()
+            } catch (Throwable ignore) {
+                return uri
             }
         }
         void assertNoGoto(Map args=[:]) {
@@ -375,6 +398,48 @@ LspTestClient.run(lspCmd, debug){ def client ->
     tuVarsGlobalVariable.assertGoto(from: "70:1", to: "57:5", test: "resolving 'def call(Map args=[:])'")
     // tuVarsGlobalVariable.assertGoto(from: "71:1", to: "49:5", test: "resolving 'def call(Map args=[:], String stageName, Closure cb)'")
     tuVarsGlobalVariable.assertNoDiagnostic()
+
+    def tuVarsMultipleFiles = client.loadTestUnit("./integration-tests/vars/multiple-files.groovy")
+    tuVarsMultipleFiles.assertGoto(
+        from: "4:5",
+        to: "3:5",
+        targetFile: "./integration-tests/vars/foo.groovy",
+        test: "resolving cross-file vars call 'foo(...)' from multiple-files.groovy"
+    )
+    tuVarsMultipleFiles.assertGoto(
+        from: "7:9",
+        to: "12:5",
+        targetFile: "./integration-tests/vars/foo.groovy",
+        test: "resolving foo.helperStep(...) from multiple-files.groovy"
+    )
+    tuVarsMultipleFiles.assertGoto(
+        from: "8:9",
+        to: "16:5",
+        targetFile: "./integration-tests/vars/foo.groovy",
+        test: "resolving foo.deepHelper(...) from multiple-files.groovy"
+    )
+    tuVarsMultipleFiles.assertNoDiagnostic()
+
+    def tuVarsFooMulti = client.loadTestUnit("./integration-tests/vars/foo.groovy")
+    tuVarsFooMulti.assertGoto(
+        from: "7:5",
+        to: "3:5",
+        targetFile: "./integration-tests/vars/bar.groovy",
+        test: "resolving vars call 'bar(...)' from foo.groovy"
+    )
+    tuVarsFooMulti.assertGoto(
+        from: "8:9",
+        to: "18:5",
+        targetFile: "./integration-tests/vars/bar.groovy",
+        test: "resolving bar.helperFromPoo(...) from foo.groovy"
+    )
+    tuVarsFooMulti.assertGoto(
+        from: "24:16",
+        to: "22:5",
+        targetFile: "./integration-tests/vars/bar.groovy",
+        test: "resolving bar.doubleHelper(...) from foo.groovy"
+    )
+    tuVarsFooMulti.assertNoDiagnostic()
 
     def tuPipelinesJobDslBasic = client.loadTestUnit("./integration-tests/pipelines/job-dsl-basic.groovy") 
     tuPipelinesJobDslBasic.assertGoto(from: "24:8", to: "21:1", test: "resolving global variable 'somedir'")
