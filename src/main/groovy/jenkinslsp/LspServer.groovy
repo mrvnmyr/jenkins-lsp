@@ -18,6 +18,33 @@ class LspServer {
     private File lastProjectRoot = null
     private File lastVarsDirectory = null
     private VarsSymbolIndex lastVarsIndex = VarsSymbolIndex.empty()
+    private final Map<String, DocumentState> openDocuments = [:]
+
+    private static class DocumentState {
+        final String uri
+        final SourceUnit parsedUnit
+        final String sourceText
+        final File documentFile
+        final File projectRoot
+        final File varsDirectory
+        final VarsSymbolIndex varsIndex
+
+        DocumentState(String uri,
+                      SourceUnit parsedUnit,
+                      String sourceText,
+                      File documentFile,
+                      File projectRoot,
+                      File varsDirectory,
+                      VarsSymbolIndex varsIndex) {
+            this.uri = uri
+            this.parsedUnit = parsedUnit
+            this.sourceText = sourceText ?: ""
+            this.documentFile = documentFile
+            this.projectRoot = projectRoot
+            this.varsDirectory = varsDirectory
+            this.varsIndex = varsIndex ?: VarsSymbolIndex.empty()
+        }
+    }
 
     LspServer(JsonRpcTransport transport) {
         this.transport = transport
@@ -90,18 +117,18 @@ class LspServer {
         Logging.debug("  Content length: ${(content ?: '').length()} chars")
 
         def pr = Parser.parseGroovy(content ?: "")
-        this.lastParsedUnit = pr.unit
-        this.lastSourceText = pr.sourceText
-        this.lastDocumentUri = uri
-        this.lastDocumentFile = fileFromUri(uri)
-        this.lastProjectRoot = findProjectRoot(this.lastDocumentFile)
-        this.lastVarsDirectory = determineVarsDirectory(this.lastDocumentFile, this.lastProjectRoot)
-        if (this.lastVarsDirectory) {
-            Logging.log("Detected vars directory for multi-file lookup: ${this.lastVarsDirectory}")
-            this.lastVarsIndex = VarsSymbolIndex.build(this.lastVarsDirectory, this.lastDocumentFile, this.lastSourceText ?: "")
-        } else {
-            this.lastVarsIndex = VarsSymbolIndex.empty()
+        File documentFile = fileFromUri(uri)
+        File projectRoot = findProjectRoot(documentFile)
+        File varsDirectory = determineVarsDirectory(documentFile, projectRoot)
+        VarsSymbolIndex varsIndex = varsDirectory ?
+                VarsSymbolIndex.build(varsDirectory, documentFile, pr.sourceText ?: "") :
+                VarsSymbolIndex.empty()
+        if (varsDirectory) {
+            Logging.log("Detected vars directory for multi-file lookup: ${varsDirectory}")
         }
+        DocumentState state = new DocumentState(uri, pr.unit, pr.sourceText, documentFile, projectRoot, varsDirectory, varsIndex)
+        openDocuments[uri] = state
+        applyDocumentState(state)
 
         def diagnostics = []
         for (error in pr.diagnostics) {
@@ -149,6 +176,10 @@ class LspServer {
 
     private void handleDefinition(Object message) {
         try {
+            if (!useDocumentForRequest(message?.params?.textDocument?.uri)) {
+                transport.sendMessage([jsonrpc: "2.0", id: message.id, result: null])
+                return
+            }
             if (!lastParsedUnit) {
                 transport.sendMessage([jsonrpc: "2.0", id: message.id, result: null])
                 return
@@ -593,6 +624,10 @@ class LspServer {
 
     private void handleCompletion(Object message) {
         try {
+            if (!useDocumentForRequest(message?.params?.textDocument?.uri)) {
+                transport.sendMessage([jsonrpc: "2.0", id: message.id, result: [isIncomplete:false, items: []]])
+                return
+            }
             if (!lastParsedUnit || lastSourceText == null) {
                 transport.sendMessage([jsonrpc: "2.0", id: message.id, result: [isIncomplete:false, items: []]])
                 return
@@ -628,5 +663,31 @@ class LspServer {
             t.printStackTrace(System.err)
             transport.sendMessage([jsonrpc: "2.0", id: message.id, result: [isIncomplete:false, items: []]])
         }
+    }
+
+    private boolean useDocumentForRequest(String requestedUri) {
+        String key = requestedUri ?: this.lastDocumentUri
+        if (!key) {
+            Logging.log("No document URI available for request.")
+            return false
+        }
+        DocumentState state = openDocuments[key]
+        if (!state) {
+            Logging.log("No open document state found for URI ${key}")
+            return false
+        }
+        applyDocumentState(state)
+        return true
+    }
+
+    private void applyDocumentState(DocumentState state) {
+        if (!state) return
+        this.lastParsedUnit = state.parsedUnit
+        this.lastSourceText = state.sourceText ?: ""
+        this.lastDocumentUri = state.uri
+        this.lastDocumentFile = state.documentFile
+        this.lastProjectRoot = state.projectRoot
+        this.lastVarsDirectory = state.varsDirectory
+        this.lastVarsIndex = state.varsIndex ?: VarsSymbolIndex.empty()
     }
 }

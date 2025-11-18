@@ -210,6 +210,17 @@ class LspTestClient {
                     }
                 } catch (Exception e) {}
             }
+        } else {
+            // Always drain stderr to avoid blocking the server when debug logging is disabled.
+            lspStderrThread = Thread.start {
+                try {
+                    InputStream es = lspProcess.getErrorStream()
+                    byte[] buf = new byte[1024]
+                    while (es.read(buf) != -1) {
+                        // discard
+                    }
+                } catch (Exception ignore) {}
+            }
         }
     }
     void send(Object msg) {
@@ -432,6 +443,28 @@ LspTestClient.run(lspCmd, debug){ def client ->
             test: "resolving bar.helperFromBar(...) from foo.groovy"
             )
     tuVarsFoo.assertNoDiagnostic()
+
+    def tuVarsMultiple = client.loadTestUnit("./tests/vars/multiple-files.groovy")
+    tuVarsMultiple.assertGoto(
+            from: "4:5",
+            to: "3:5",
+            targetFile: "./tests/vars/foo.groovy",
+            test: "resolving first foo(...) call from multiple-files.groovy"
+            )
+    client.loadTestUnit("./tests/vars/foo.groovy")
+    tuVarsMultiple.assertGoto(
+            from: "7:5",
+            to: "3:5",
+            targetFile: "./tests/vars/foo.groovy",
+            test: "resolving foo(...) again after another vars file was opened"
+            )
+    tuVarsMultiple.assertGoto(
+            from: "8:5",
+            to: "3:5",
+            targetFile: "./tests/vars/foo.groovy",
+            test: "resolving foo.deepHelper(...) after another vars file was opened"
+            )
+    tuVarsMultiple.assertNoDiagnostic()
 
     def tuPipelinesJobDslBasic = client.loadTestUnit("./tests/pipelines/job-dsl-basic.groovy")
     tuPipelinesJobDslBasic.assertGoto(from: "24:8", to: "21:1", test: "resolving global variable 'somedir'")
