@@ -415,6 +415,7 @@ LspTestClient.run(lspCmd, debug){ def client ->
     tuVarsBar.assertGoto(from: "4:5", to: "3:5", targetFile: "./tests/vars/foo.groovy", test: "resolving cross-file vars call 'foo(...)' from bar.groovy")
     tuVarsBar.assertGoto(from: "7:5", to: "3:5", targetFile: "./tests/vars/foo.groovy", test: "resolving cross-file vars call 'foo(...)' from bar.groovy")
     tuVarsBar.assertGoto(from: "8:5", to: "3:5", targetFile: "./tests/vars/foo.groovy", test: "resolving cross-file vars call 'foo(...)' from bar.groovy")
+    tuVarsBar.assertGoto(from: "7:9", to: "12:5", targetFile: "./tests/vars/foo.groovy", test: "resolving cross-file vars call 'foo.helperStep(...)' from bar.groovy")
     tuVarsBar.assertNoDiagnostic()
 
     def tuVarsFoo = client.loadTestUnit("./tests/vars/foo.groovy")
