@@ -24,4 +24,4 @@ tasks:
   tests:
     deps: [build]
     cmds:
-      - ./integration-tests.groovy {{.CLI_ARGS}}
+      - ./tests.groovy {{.CLI_ARGS}}

@@ -1,4 +1,4 @@
-// Integration test fixture mirroring poo.groovy to exercise cross-file vars lookups.
+// RESERVED
 
 def call(Map args=[:], Closure body = null) {
     foo(stageName: args.stageName ?: "poo-stage") {
@@ -13,12 +13,4 @@ def call(Map args=[:], Closure body = null) {
         body()
     }
     return args.stageName ?: "poo-stage"
-}
-
-def helperFromPoo(String label) {
-    return label?.reverse()
-}
-
-def doubleHelper(Number n) {
-    return (n ?: 0) * 2
 }

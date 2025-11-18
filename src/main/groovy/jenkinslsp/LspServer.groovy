@@ -406,7 +406,7 @@ class LspServer {
                     nextNonSpaceChar == '.' ||   // static access Foo.SOMETHING
                     (classExists && Character.isUpperCase(word.charAt(0)))
 
-            Logging.log("Context decision for '${word}': looksLikeTypeContext=${looksLikeTypeContext}, classExists=${classExists}, prevWord=${prevWordGeneric}, prevChar='${prevNonSpaceChar}', nextChar='${nextNonSpaceChar}'")
+            Logging.log("Context decision for '${word}': looksLikeTypeContext=${looksLikeTypeContext}, classExists=${classExists}, prevWord=${prevWordGeneric}, prevChar='${prevNonSpaceChar == 0 ? "NUL" : prevNonSpaceChar}', nextChar='${nextNonSpaceChar == 0 ? "NUL" : nextNonSpaceChar}'")
 
             // Prefer top-level variables for non-call identifiers ONLY when we are not in a type-ish context.
             if (!isUnqualifiedCall && !looksLikeTypeContext) {

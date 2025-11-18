@@ -128,7 +128,8 @@ class LspTestClient {
                         def kind = (it.kind instanceof Number) ? (it.kind as int) : 0
                         String label = (it.label ?: "").toString()
                         if (label) {
-                            if (kind == 2 && !label.endsWith("()")) { // Method
+                            if (kind == 2 && !label.endsWith("()")) {
+                                // Method
                                 got << (label + "()")
                             } else {
                                 got << label
@@ -182,11 +183,11 @@ class LspTestClient {
                     // Read headers
                     while ((line = lspOut.readLine()) != null) {
                         if (line.trim() == "") break
-                        def parts = line.split(/:\s*/, 2)
+                            def parts = line.split(/:\s*/, 2)
                         if (parts.size() == 2) headers[parts[0]] = parts[1]
                     }
                     if (!headers['Content-Length']) continue
-                    int len = headers['Content-Length'] as int
+                        int len = headers['Content-Length'] as int
                     char[] buf = new char[len]
                     int read = lspOut.read(buf, 0, len)
                     if (read != len) throw new IOException("Short read: $read vs $len")
@@ -338,11 +339,11 @@ class LspTestClient {
         lspStderrThread?.interrupt()
     }
     static void run(String lspCmd, Boolean debug, Closure cb) {
-        def client = new LspTestClient() 
-        try { 
-            client.startLsp(lspCmd, debug) 
-            client.sendInitialize() 
-            Thread.sleep(200) 
+        def client = new LspTestClient()
+        try {
+            client.startLsp(lspCmd, debug)
+            client.sendInitialize()
+            Thread.sleep(200)
             cb(client)
         } finally {
             client.close()
@@ -363,10 +364,10 @@ def debug = args.any { it == '--debug' || it == '-d' }
 // def lspCmd = "java -jar ./target/hello-world-1.0.0.jar"
 def lspCmd = "java -jar ./target/jenkins-lsp-1.0.0-all.jar"
 LspTestClient.run(lspCmd, debug){ def client ->
-    def tuBasics = client.loadTestUnit("./integration-tests/src/jenkinslsp/basics.groovy") 
+    def tuBasics = client.loadTestUnit("./tests/src/jenkinslsp/basics.groovy")
 
     // Example (optional) completion check — uncomment to use:
-    tuBasics.assertCompletion(input: "Bar.", suggestions: [ "bar()", "heh()", "foo" ])
+    tuBasics.assertCompletion(input: "Bar.", suggestions: ["bar()", "heh()", "foo"])
 
     tuBasics.assertGoto(from: "35:12", to: "29:9", test: "resolving 'rabauke'")
     tuBasics.assertGoto(from: "34:9", to: "26:27", test: "resolving foo (parameter)")
@@ -385,63 +386,54 @@ LspTestClient.run(lspCmd, debug){ def client ->
     tuBasics.assertGoto(from: "55:21", to: "6:5", test: "resolving 'topLevelVar' inside of a placeholder expression in a \" string literal - which should succeed")
     tuBasics.assertNoDiagnostic()
 
-    def tuBasicsErrors = client.loadTestUnit("./integration-tests/src/jenkinslsp/basics-errors.groovy") 
+    def tuBasicsErrors = client.loadTestUnit("./tests/src/jenkinslsp/basics-errors.groovy")
     tuBasicsErrors.assertDiagnostic(msg: """{message=Method 'methodMissingReturn' declares return type 'String' but does not return anything, range={end={character=1, line=10}, start={character=0, line=10}}, severity=1, source=groovy-lsp}""", test: "methods with false/missing return values/types")
     tuBasicsErrors.assertDiagnostic(msg: """{message=Method 'insufficientIfReturn' declares return type 'String' but does not return anything, range={end={character=1, line=20}, start={character=0, line=20}}, severity=1, source=groovy-lsp}""", test: "methods with false/missing return values/types")
     tuBasicsErrors.assertDiagnostic(msg: """{message=Method 'insufficientSwitchReturn' declares return type 'String' but does not return anything, range={end={character=1, line=26}, start={character=0, line=26}}, severity=1, source=groovy-lsp}""", test: "methods with false/missing return values/types")
 
-    def tuNoErrors = client.loadTestUnit("./integration-tests/src/jenkinslsp/no-errors.groovy") 
+    def tuNoErrors = client.loadTestUnit("./tests/src/jenkinslsp/no-errors.groovy")
     tuNoErrors.assertNoDiagnostic()
 
-    def tuVarsGlobalVariable = client.loadTestUnit("./integration-tests/vars/global-variable.groovy") 
+    def tuVarsGlobalVariable = client.loadTestUnit("./tests/vars/global-variable.groovy")
     tuVarsGlobalVariable.assertGoto(from: "69:1", to: "39:5", test: "resolving 'def call(Map args=[:], Closure cb)'")
     tuVarsGlobalVariable.assertGoto(from: "70:1", to: "57:5", test: "resolving 'def call(Map args=[:])'")
     // tuVarsGlobalVariable.assertGoto(from: "71:1", to: "49:5", test: "resolving 'def call(Map args=[:], String stageName, Closure cb)'")
     tuVarsGlobalVariable.assertNoDiagnostic()
 
-    def tuVarsMultipleFiles = client.loadTestUnit("./integration-tests/vars/multiple-files.groovy")
-    tuVarsMultipleFiles.assertGoto(
-        from: "4:5",
-        to: "3:5",
-        targetFile: "./integration-tests/vars/foo.groovy",
-        test: "resolving cross-file vars call 'foo(...)' from multiple-files.groovy"
-    )
-    tuVarsMultipleFiles.assertGoto(
-        from: "7:9",
-        to: "12:5",
-        targetFile: "./integration-tests/vars/foo.groovy",
-        test: "resolving foo.helperStep(...) from multiple-files.groovy"
-    )
-    tuVarsMultipleFiles.assertGoto(
-        from: "8:9",
-        to: "16:5",
-        targetFile: "./integration-tests/vars/foo.groovy",
-        test: "resolving foo.deepHelper(...) from multiple-files.groovy"
-    )
-    tuVarsMultipleFiles.assertNoDiagnostic()
+    def tuVarsBar = client.loadTestUnit("./tests/vars/bar.groovy")
+    tuVarsBar.assertGoto( from: "4:5", to: "3:5", targetFile: "./tests/vars/foo.groovy", test: "resolving cross-file vars call 'foo(...)' from bar.groovy")
+    tuVarsBar.assertGoto( from: "7:5", to: "3:5", targetFile: "./tests/vars/foo.groovy", test: "resolving cross-file vars call 'foo(...)' from bar.groovy")
+    tuVarsBar.assertGoto( from: "8:5", to: "3:5", targetFile: "./tests/vars/foo.groovy", test: "resolving cross-file vars call 'foo(...)' from bar.groovy")
+    tuVarsBar.assertNoDiagnostic()
 
-    def tuVarsFooMulti = client.loadTestUnit("./integration-tests/vars/foo.groovy")
-    tuVarsFooMulti.assertGoto(
-        from: "7:5",
-        to: "3:5",
-        targetFile: "./integration-tests/vars/bar.groovy",
-        test: "resolving vars call 'bar(...)' from foo.groovy"
-    )
-    tuVarsFooMulti.assertGoto(
-        from: "8:9",
-        to: "18:5",
-        targetFile: "./integration-tests/vars/bar.groovy",
-        test: "resolving bar.helperFromPoo(...) from foo.groovy"
-    )
-    tuVarsFooMulti.assertGoto(
-        from: "24:16",
-        to: "22:5",
-        targetFile: "./integration-tests/vars/bar.groovy",
-        test: "resolving bar.doubleHelper(...) from foo.groovy"
-    )
-    tuVarsFooMulti.assertNoDiagnostic()
+    def tuVarsFoo = client.loadTestUnit("./tests/vars/foo.groovy")
+    tuVarsFoo.assertGoto(
+            from: "7:5",
+            to: "3:5",
+            targetFile: "./tests/vars/bar.groovy",
+            test: "resolving vars call 'bar(...)' from foo.groovy"
+            )
+    tuVarsFoo.assertGoto(
+            from: "8:9",
+            to: "18:5",
+            targetFile: "./tests/vars/bar.groovy",
+            test: "resolving bar.helperFromPoo(...) from foo.groovy"
+            )
+    tuVarsFoo.assertGoto(
+            from: "24:16",
+            to: "22:5",
+            targetFile: "./tests/vars/bar.groovy",
+            test: "resolving bar.doubleHelper(...) from foo.groovy"
+            )
+    tuVarsFoo.assertGoto(
+            from: "18:13",
+            to: "18:5",
+            targetFile: "./tests/vars/bar.groovy",
+            test: "resolving bar.helperFromBar(...) from foo.groovy"
+            )
+    tuVarsFoo.assertNoDiagnostic()
 
-    def tuPipelinesJobDslBasic = client.loadTestUnit("./integration-tests/pipelines/job-dsl-basic.groovy") 
+    def tuPipelinesJobDslBasic = client.loadTestUnit("./tests/pipelines/job-dsl-basic.groovy")
     tuPipelinesJobDslBasic.assertGoto(from: "24:8", to: "21:1", test: "resolving global variable 'somedir'")
     tuPipelinesJobDslBasic.assertGoto(from: "28:26", to: "21:1", test: "resolving global variable 'somedir' in a string literal without braces")
     tuPipelinesJobDslBasic.assertGoto(from: "28:35", to: "22:1", test: "resolving global variable 'somerepo' in a string literal without braces")
