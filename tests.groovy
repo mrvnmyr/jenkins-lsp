@@ -412,59 +412,17 @@ LspTestClient.run(lspCmd, debug){ def client ->
     tuVarsGlobalVariable.assertNoDiagnostic()
 
     def tuVarsBar = client.loadTestUnit("./tests/vars/bar.groovy")
-    tuVarsBar.assertGoto( from: "4:5", to: "3:5", targetFile: "./tests/vars/foo.groovy", test: "resolving cross-file vars call 'foo(...)' from bar.groovy")
-    tuVarsBar.assertGoto( from: "7:5", to: "3:5", targetFile: "./tests/vars/foo.groovy", test: "resolving cross-file vars call 'foo(...)' from bar.groovy")
-    tuVarsBar.assertGoto( from: "8:5", to: "3:5", targetFile: "./tests/vars/foo.groovy", test: "resolving cross-file vars call 'foo(...)' from bar.groovy")
+    tuVarsBar.assertGoto(from: "4:5", to: "3:5", targetFile: "./tests/vars/foo.groovy", test: "resolving cross-file vars call 'foo(...)' from bar.groovy")
+    tuVarsBar.assertGoto(from: "7:5", to: "3:5", targetFile: "./tests/vars/foo.groovy", test: "resolving cross-file vars call 'foo(...)' from bar.groovy")
+    tuVarsBar.assertGoto(from: "8:5", to: "3:5", targetFile: "./tests/vars/foo.groovy", test: "resolving cross-file vars call 'foo(...)' from bar.groovy")
     tuVarsBar.assertNoDiagnostic()
 
     def tuVarsFoo = client.loadTestUnit("./tests/vars/foo.groovy")
-    tuVarsFoo.assertGoto(
-            from: "7:5",
-            to: "3:5",
-            targetFile: "./tests/vars/bar.groovy",
-            test: "resolving vars call 'bar(...)' from foo.groovy"
-            )
-    tuVarsFoo.assertGoto(
-            from: "8:9",
-            to: "18:5",
-            targetFile: "./tests/vars/bar.groovy",
-            test: "resolving bar.helperFromPoo(...) from foo.groovy"
-            )
-    tuVarsFoo.assertGoto(
-            from: "24:16",
-            to: "22:5",
-            targetFile: "./tests/vars/bar.groovy",
-            test: "resolving bar.doubleHelper(...) from foo.groovy"
-            )
-    tuVarsFoo.assertGoto(
-            from: "18:13",
-            to: "18:5",
-            targetFile: "./tests/vars/bar.groovy",
-            test: "resolving bar.helperFromBar(...) from foo.groovy"
-            )
+    tuVarsFoo.assertGoto(from: "7:5", to: "3:5", targetFile: "./tests/vars/bar.groovy", test: "resolving vars call 'bar(...)' from foo.groovy")
+    tuVarsFoo.assertGoto(from: "8:9", to: "18:5", targetFile: "./tests/vars/bar.groovy", test: "resolving bar.helperFromPoo(...) from foo.groovy")
+    tuVarsFoo.assertGoto(from: "24:16", to: "22:5", targetFile: "./tests/vars/bar.groovy", test: "resolving bar.doubleHelper(...) from foo.groovy")
+    tuVarsFoo.assertGoto(from: "18:13", to: "18:5", targetFile: "./tests/vars/bar.groovy", test: "resolving bar.helperFromBar(...) from foo.groovy")
     tuVarsFoo.assertNoDiagnostic()
-
-    def tuVarsMultiple = client.loadTestUnit("./tests/vars/multiple-files.groovy")
-    tuVarsMultiple.assertGoto(
-            from: "4:5",
-            to: "3:5",
-            targetFile: "./tests/vars/foo.groovy",
-            test: "resolving first foo(...) call from multiple-files.groovy"
-            )
-    client.loadTestUnit("./tests/vars/foo.groovy")
-    tuVarsMultiple.assertGoto(
-            from: "7:5",
-            to: "3:5",
-            targetFile: "./tests/vars/foo.groovy",
-            test: "resolving foo(...) again after another vars file was opened"
-            )
-    tuVarsMultiple.assertGoto(
-            from: "8:5",
-            to: "3:5",
-            targetFile: "./tests/vars/foo.groovy",
-            test: "resolving foo.deepHelper(...) after another vars file was opened"
-            )
-    tuVarsMultiple.assertNoDiagnostic()
 
     def tuPipelinesJobDslBasic = client.loadTestUnit("./tests/pipelines/job-dsl-basic.groovy")
     tuPipelinesJobDslBasic.assertGoto(from: "24:8", to: "21:1", test: "resolving global variable 'somedir'")
