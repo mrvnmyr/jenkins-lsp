@@ -1,6 +1,7 @@
 package jenkinslsp
 
 import org.codehaus.groovy.ast.MethodNode
+import org.codehaus.groovy.ast.Parameter
 import java.io.IOException
 
 /**
@@ -106,10 +107,22 @@ class VarsSymbolIndex {
                 if (l < 0) l = 0
                 int c = StringHeuristics.smartVarColumn(lines, l, name)
                 if (c < 0) c = 0
-                res[name] = [line: l, column: c]
+                res[name] = [line: l, column: c, requiredArgs: countRequiredArgs(method)]
             }
         } catch (Throwable ignore) {}
         return res
+    }
+
+    private static int countRequiredArgs(MethodNode method) {
+        Parameter[] params = method?.parameters ?: Parameter.EMPTY_ARRAY
+        int required = 0
+        for (Parameter p : params) {
+            if (p == null) continue
+            if (!p.hasInitialExpression()) {
+                required++
+            }
+        }
+        return required
     }
 
     private static File canonical(File f) {

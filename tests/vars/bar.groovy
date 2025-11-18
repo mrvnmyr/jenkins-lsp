@@ -9,6 +9,8 @@ def call(Map args=[:], Closure body = null) {
         message: "from-bar",
         forwardTobar: "buzz"
     ])
+    foo.helperStep()
+    foo.askBarForDouble()
     if (body) {
         body()
     }

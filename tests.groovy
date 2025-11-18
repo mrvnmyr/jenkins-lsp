@@ -419,13 +419,14 @@ LspTestClient.run(lspCmd, debug){ def client ->
     tuVarsBar.assertGoto(from: "7:5", to: "3:5", targetFile: "./tests/vars/foo.groovy", test: "resolving cross-file vars call 'foo(...)' from bar.groovy")
     tuVarsBar.assertGoto(from: "8:5", to: "3:5", targetFile: "./tests/vars/foo.groovy", test: "resolving cross-file vars call 'foo(...)' from bar.groovy")
     tuVarsBar.assertGoto(from: "7:9", to: "12:5", targetFile: "./tests/vars/foo.groovy", test: "resolving cross-file vars call 'foo.helperStep(...)' from bar.groovy")
-    tuVarsBar.assertNoDiagnostic()
+    tuVarsBar.assertDiagnostic(msg: """{message=Method 'helperStep' requires at least 1 argument but 0 were provided, range={end={character=5, line=11}, start={character=4, line=11}}, severity=1, source=groovy-lsp}""", test: "detect missing args for foo.helperStep from vars script")
+    tuVarsBar.assertDiagnostic(msg: """{message=Method 'askBarForDouble' requires at least 1 argument but 0 were provided, range={end={character=5, line=12}, start={character=4, line=12}}, severity=1, source=groovy-lsp}""", test: "detect missing args for foo.askBarForDouble from vars script")
 
     def tuVarsFoo = client.loadTestUnit("./tests/vars/foo.groovy")
     tuVarsFoo.assertGoto(from: "7:5", to: "3:5", targetFile: "./tests/vars/bar.groovy", test: "resolving vars call 'bar(...)' from foo.groovy")
-    tuVarsFoo.assertGoto(from: "8:9", to: "18:5", targetFile: "./tests/vars/bar.groovy", test: "resolving bar.helperFromPoo(...) from foo.groovy")
-    tuVarsFoo.assertGoto(from: "24:16", to: "22:5", targetFile: "./tests/vars/bar.groovy", test: "resolving bar.doubleHelper(...) from foo.groovy")
-    tuVarsFoo.assertGoto(from: "18:13", to: "18:5", targetFile: "./tests/vars/bar.groovy", test: "resolving bar.helperFromBar(...) from foo.groovy")
+    tuVarsFoo.assertGoto(from: "8:9", to: "20:5", targetFile: "./tests/vars/bar.groovy", test: "resolving bar.helperFromPoo(...) from foo.groovy")
+    tuVarsFoo.assertGoto(from: "24:16", to: "24:5", targetFile: "./tests/vars/bar.groovy", test: "resolving bar.doubleHelper(...) from foo.groovy")
+    tuVarsFoo.assertGoto(from: "18:13", to: "20:5", targetFile: "./tests/vars/bar.groovy", test: "resolving bar.helperFromBar(...) from foo.groovy")
     tuVarsFoo.assertNoDiagnostic()
 
     def tuPipelinesJobDslBasic = client.loadTestUnit("./tests/pipelines/job-dsl-basic.groovy")

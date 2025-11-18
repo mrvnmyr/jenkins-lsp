@@ -1,10 +1,20 @@
 package jenkinslsp
 
 import groovy.json.JsonOutput
+import org.codehaus.groovy.ast.ClassNode
+import org.codehaus.groovy.ast.CodeVisitorSupport
+import org.codehaus.groovy.ast.MethodNode
+import org.codehaus.groovy.ast.expr.ArgumentListExpression
+import org.codehaus.groovy.ast.expr.Expression
+import org.codehaus.groovy.ast.expr.MethodCallExpression
+import org.codehaus.groovy.ast.expr.TupleExpression
+import org.codehaus.groovy.ast.expr.VariableExpression
 import org.codehaus.groovy.control.SourceUnit
 import java.io.File
 import java.io.IOException
 import java.net.URI
+import java.util.HashSet
+import java.util.Set
 
 /**
  * Minimal LSP server loop + JSON-RPC handling.
@@ -130,8 +140,17 @@ class LspServer {
         openDocuments[uri] = state
         applyDocumentState(state)
 
+        List<Map> diagSources = []
+        if (pr.diagnostics) {
+            diagSources.addAll(pr.diagnostics)
+        }
+        def varsArityErrors = collectVarsArityDiagnostics(pr.unit, documentFile, state.varsIndex)
+        if (varsArityErrors) {
+            diagSources.addAll(varsArityErrors)
+        }
+
         def diagnostics = []
-        for (error in pr.diagnostics) {
+        for (error in diagSources) {
             diagnostics << [
                 range: [
                     start: [line: error.line, character: error.column],
@@ -547,6 +566,106 @@ class LspServer {
             Logging.log("vars lookup failed for '${word}': ${t.class.name}: ${t.message}")
         }
         return null
+    }
+
+    private static List<Map> collectVarsArityDiagnostics(SourceUnit unit, File documentFile, VarsSymbolIndex varsIndex) {
+        if (!unit?.AST) return []
+        if (!documentFile?.parentFile) return []
+        if (!"vars".equals(documentFile.parentFile.name)) return []
+        if (!varsIndex) return []
+        List<Map> diagnostics = []
+        VarsMethodCallArityVisitor visitor = new VarsMethodCallArityVisitor(varsIndex, diagnostics)
+        try {
+            unit.AST.statementBlock?.visit(visitor)
+        } catch (Throwable ignore) {}
+        for (MethodNode method : unit.AST.methods ?: Collections.emptyList()) {
+            try {
+                method?.code?.visit(visitor)
+            } catch (Throwable ignore) {}
+        }
+        for (ClassNode cls : unit.AST.classes ?: Collections.emptyList()) {
+            for (MethodNode method : cls.methods ?: Collections.emptyList()) {
+                try {
+                    method?.code?.visit(visitor)
+                } catch (Throwable ignore) {}
+            }
+        }
+        return diagnostics
+    }
+
+    private static class VarsMethodCallArityVisitor extends CodeVisitorSupport {
+        private final VarsSymbolIndex varsIndex
+        private final List<Map> diagnostics
+        private final Set<String> seenKeys = new HashSet<>()
+
+        VarsMethodCallArityVisitor(VarsSymbolIndex varsIndex, List<Map> diagnostics) {
+            this.varsIndex = varsIndex ?: VarsSymbolIndex.empty()
+            this.diagnostics = (diagnostics != null) ? diagnostics : []
+        }
+
+        @Override
+        void visitMethodCallExpression(MethodCallExpression call) {
+            try {
+                checkCall(call)
+            } catch (Throwable ignore) {}
+            super.visitMethodCallExpression(call)
+        }
+
+        private void checkCall(MethodCallExpression call) {
+            if (!call) return
+            Expression obj = call.objectExpression
+            if (!(obj instanceof VariableExpression)) return
+            VariableExpression var = (VariableExpression) obj
+            if (var.isThisExpression()) return
+            String scriptName = var.name
+            if (!scriptName) return
+            def scriptInfo = varsIndex.getScript(scriptName)
+            if (!scriptInfo) return
+            String methodName = call.methodAsString
+            if (!methodName) return
+            Map methodInfo = scriptInfo.methodsByName?.get(methodName)
+            if (!methodInfo) return
+            int required = safeInt(methodInfo.requiredArgs)
+            if (required <= 0) return
+            int actual = countArguments(call.arguments)
+            if (actual < 0) return
+            if (actual >= required) return
+            String key = "${scriptName}.${methodName}@${call.lineNumber}:${call.columnNumber}"
+            if (!seenKeys.add(key)) return
+            diagnostics << [
+                message: buildArityMessage(methodName, required, actual),
+                line: Math.max(0, (call.lineNumber ?: 1) - 1),
+                column: Math.max(0, (call.columnNumber ?: 1) - 1)
+            ]
+        }
+
+        private static int countArguments(Expression args) {
+            if (args == null || args == MethodCallExpression.NO_ARGUMENTS) return 0
+            if (args instanceof ArgumentListExpression) {
+                return ((ArgumentListExpression) args).expressions?.size() ?: 0
+            }
+            if (args instanceof TupleExpression) {
+                return ((TupleExpression) args).expressions?.size() ?: 0
+            }
+            return 1
+        }
+
+        private static int safeInt(Object value) {
+            if (value instanceof Number) {
+                return ((Number) value).intValue()
+            }
+            try {
+                return Integer.parseInt(String.valueOf(value))
+            } catch (Throwable ignore) {
+                return -1
+            }
+        }
+
+        private static String buildArityMessage(String methodName, int required, int actual) {
+            String reqText = "${required} argument" + (required == 1 ? "" : "s")
+            String actualText = (actual == 1 ? "1 was" : "${actual} were")
+            return "Method '${methodName}' requires at least ${reqText} but ${actualText} provided"
+        }
     }
 
     private static String qualifierForWord(String lineText, int wordStart) {
