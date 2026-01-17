@@ -78,12 +78,18 @@ class LspTestClient {
             try {
                 print "[${this.name}] Asserting diagnostic: ${args.msg} "
                 def diags = getDiagnostics(uri)
-                assert diags.find { it.toString() == args.msg } : "\nExpected diagnostic:\n${args.msg}\n\nActual:\n$diags"
+                assert diags.find { formatDiagnostic(it) == args.msg } : "\nExpected diagnostic:\n${args.msg}\n\nActual:\n$diags"
                 print "  ...OK\n"
             } catch (Throwable e) {
                 testErrors << "[${this.name}] assertDiagnostic failed: While testing ${args.test}. ${e.message}"
                 println " ...FAILED"
             }
+        }
+        private static String formatDiagnostic(Map diag) {
+            def range = diag.range ?: [:]
+            def start = range.start ?: [:]
+            def end = range.end ?: [:]
+            return "{message=${diag.message}, range={end={character=${end.character}, line=${end.line}}, start={character=${start.character}, line=${start.line}}}, severity=${diag.severity}, source=${diag.source}}"
         }
         void assertNoDiagnostic() {
             try {
