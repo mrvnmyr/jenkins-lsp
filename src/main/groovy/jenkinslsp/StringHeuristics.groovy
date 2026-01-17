@@ -1,24 +1,30 @@
 package jenkinslsp
 
+import groovy.transform.CompileStatic
+import java.util.ArrayList
+import java.util.regex.Matcher
+import java.util.regex.Pattern
+
 /**
  * Heuristics that operate purely on strings/regex, intentionally separated from
  * AST traversal. These are used for column estimation, keyword checks, and
  * argument-kind detection from callsites.
  */
 class StringHeuristics {
+    @CompileStatic
     static int smartVarColumn(List<String> lines, int line, String name) {
         if (name == null) {
             Logging.debug("    DEBUG: smartVarColumn called with null name, returning 0")
             return 0
         }
         String text = (line >= 0 && line < lines.size()) ? (lines[line] ?: "") : ""
-        def patterns = [
-            ~/\bdef\s+${java.util.regex.Pattern.quote(name)}\b/,
-            ~/\b\w+\s+${java.util.regex.Pattern.quote(name)}\b/,
-            ~/\b\w+\s*<.*?>\s+${java.util.regex.Pattern.quote(name)}\b/,
+        List<Pattern> patterns = [
+            Pattern.compile("\\bdef\\s+" + Pattern.quote(name) + "\\b"),
+            Pattern.compile("\\b\\w+\\s+" + Pattern.quote(name) + "\\b"),
+            Pattern.compile("\\b\\w+\\s*<.*?>\\s+" + Pattern.quote(name) + "\\b")
         ]
-        for (p in patterns) {
-            def m = p.matcher(text)
+        for (Pattern p : patterns) {
+            Matcher m = p.matcher(text)
             if (m.find()) {
                 int idx = m.start() + m.group(0).lastIndexOf(name)
                 Logging.debug("    DEBUG: smartVarColumn matched '${name}' in: '${text}' => col ${idx}")
@@ -36,13 +42,15 @@ class StringHeuristics {
      * Example: "Float\n what = 90"
      * Returns [line, col] or null.
      */
+    @CompileStatic
     static List<Integer> scanMultiLineVar(List<String> lines, int startLine, String name) {
         for (int i = startLine + 1; i < Math.min(lines.size(), startLine + 4); ++i) {
             String txt = lines[i]
             if (!txt) continue
-            def m = (txt =~ /(^\s*)${java.util.regex.Pattern.quote(name)}\b/)
+            Pattern p = Pattern.compile("(^\\s*)" + Pattern.quote(name) + "\\b")
+            Matcher m = p.matcher(txt)
             if (m.find()) {
-                int col = m.start(0) + m.group(1).length()
+                int col = m.start() + m.group(1).length()
                 Logging.debug("    DEBUG: scanMultiLineVar: '${name}' found on line ${i} col ${col}: '${txt}'")
                 return [i, col]
             }
@@ -60,6 +68,7 @@ class StringHeuristics {
     }
 
     /** Is the position inside a double-quoted string on this line? */
+    @CompileStatic
     static boolean isInsideDoubleQuotedString(String line, int pos) {
         boolean inside = false
         boolean escape = false
@@ -73,6 +82,7 @@ class StringHeuristics {
     }
 
     /** Is the position inside a ${...} placeholder on this line? */
+    @CompileStatic
     static boolean isInsideGStringPlaceholder(String line, int pos) {
         if (line == null) return false
         int open = line.lastIndexOf('\u0024{', Math.min(pos, line.length())) // '${'
@@ -91,15 +101,18 @@ class StringHeuristics {
      * identifier is *exclusive*. This prevents false positives when the cursor sits
      * just after the variable (e.g., on the '/' in "$var/").
      */
+    @CompileStatic
     static String gstringVarAt(String line, int pos) {
         if (line == null) return null
-        def m = (line =~ /\$[A-Za-z_][A-Za-z0-9_]*/)
+        Pattern p = Pattern.compile('\\$[A-Za-z_][A-Za-z0-9_]*')
+        Matcher m = p.matcher(line)
         while (m.find()) {
             int start = m.start()
             int end = m.end() // exclusive
             // If the cursor is exactly at the end (on the next char), do NOT treat as a hit.
             if (pos == end) {
-                char chAfter = (end < (line?.length() ?: 0)) ? line.charAt(end) : '\u0000'
+                int lineLen = line.length()
+                char chAfter = (end < lineLen) ? line.charAt(end) : (char) 0
                 Logging.debug("    DEBUG: gstringVarAt pos==end for token '${line.substring(start, end)}', next='${chAfter}' -> ignore")
                 continue
             }
@@ -123,15 +136,16 @@ class StringHeuristics {
      *    closure (a `{...}` argument) appears as its own argument (i.e., not a map value).
      *  - Count **String** only for positional string arguments (not for map values).
      */
+    @CompileStatic
     static List<String> extractGroovyCallArgKinds(String line, int callNameLastColumnIndex) {
-        def argKinds = [] as List<String>
+        List<String> argKinds = new ArrayList<>()
         if (line == null) return argKinds
         int idx = Math.max(0, Math.min(callNameLastColumnIndex + 1, line.length()))
         String afterCall = line.substring(idx)
         int parenIdx = afterCall.indexOf('(')
         if (parenIdx < 0) return argKinds
         String callArgsText = afterCall.substring(parenIdx + 1)
-        boolean hasTrailingClosure = callArgsText.contains(') {') || (line =~ /\)\s*\{/)
+        boolean hasTrailingClosure = callArgsText.contains(') {') || Pattern.compile("\\)\\s*\\{").matcher(line).find()
         int closeParen = callArgsText.indexOf(')')
         if (closeParen < 0) closeParen = callArgsText.length()
         String argString = callArgsText.substring(0, closeParen)
@@ -139,11 +153,13 @@ class StringHeuristics {
         boolean sawMap = false
 
         // naive split is fine for our controlled test cases
-        def parts = argString.split(',')
+        String[] parts = argString.split(',')
+        Pattern mapEntryPattern = Pattern.compile("^\\s*\\w+\\s*:")
+        Pattern stringLiteralPattern = Pattern.compile("\"(?:[^\"\\\\]|\\\\.)*\"|'(?:[^'\\\\]|\\\\.)*'")
         for (String raw in parts) {
             String p = raw.trim()
             if (p == "") continue
-            boolean isMapEntry = (p =~ /^\s*\w+\s*:/).find()
+            boolean isMapEntry = mapEntryPattern.matcher(p).find()
             if (isMapEntry) {
                 sawMap = true
                 // Map values may contain strings/closures; we must NOT treat them as positional args
@@ -155,7 +171,7 @@ class StringHeuristics {
                 continue
             }
             // positional string
-            if (p =~ /"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/) {
+            if (stringLiteralPattern.matcher(p).find()) {
                 argKinds << "String"
                 continue
             }
@@ -181,8 +197,9 @@ class StringHeuristics {
      * NOTE: To avoid stderr pipe backpressure and related timeouts, per-character debug
      * logs are suppressed here; we only emit a compact summary at the end.
      */
+    @CompileStatic
     static List<Integer> computeBraceDepths(List<String> lines) {
-        def depths = []
+        List<Integer> depths = new ArrayList<>()
         int depth = 0
 
         boolean inDq = false
@@ -199,8 +216,8 @@ class StringHeuristics {
             depths << Math.max(depth, 0) // depth at *start* of this line
             for (int j = 0; j < line.length(); j++) {
                 char ch = line.charAt(j)
-                char n1 = (j + 1 < line.length()) ? line.charAt(j + 1) : '\u0000'
-                char n2 = (j + 2 < line.length()) ? line.charAt(j + 2) : '\u0000'
+                char n1 = (j + 1 < line.length()) ? line.charAt(j + 1) : (char) 0
+                char n2 = (j + 2 < line.length()) ? line.charAt(j + 2) : (char) 0
 
                 // --- inside multi-line comment ---
                 if (inBlockComment) {
@@ -281,10 +298,10 @@ class StringHeuristics {
         }
         // Compact summary only (avoid flooding stderr)
         int n = depths.size()
-        def head = depths.take(20)
+        List<Integer> head = depths.take(20)
         Logging.debug("    DEBUG: computeBraceDepths size=${n}, head=${head}${n>20?'...':''}")
         if (n > 20) {
-            def tail = depths.subList(Math.max(0, n - 10), n)
+            List<Integer> tail = depths.subList(Math.max(0, n - 10), n)
             Logging.debug("    DEBUG: computeBraceDepths tail=${tail}")
         }
         return depths
