@@ -291,6 +291,28 @@ Options:
                 }
             }
 
+            // Fast path: vars-qualified calls like "foo.bar()" can bypass heavier resolution.
+            def varsQualified = resolveVarsQualifiedAtCursor(lineText, position.character)
+            if (varsQualified) {
+                def scriptInfo = lastVarsIndex?.getScript(varsQualified.qualifier)
+                def methodLoc = scriptInfo?.methodsByName?.get(varsQualified.member)
+                if (scriptInfo && methodLoc) {
+                    Logging.log("vars fast-path: resolved '${varsQualified.qualifier}.${varsQualified.member}' to ${methodLoc.line}:${methodLoc.column}")
+                    transport.sendMessage([
+                        jsonrpc: "2.0",
+                        id: message.id,
+                        result: [
+                            uri: scriptInfo.uri,
+                            range: [
+                                start: [line: methodLoc.line as int, character: methodLoc.column as int],
+                                end:   [line: methodLoc.line as int, character: (methodLoc.column as int) + varsQualified.member.length()]
+                            ]
+                        ]
+                    ])
+                    return
+                }
+            }
+
             // Strict qualified property/member lookup at the cursor
             def qualifiedAttempt = MemberResolver.resolveQualifiedProperty(lastParsedUnit, lines, position.line, position.character, lineText)
             if (qualifiedAttempt?.matchAtCursor) {
@@ -778,6 +800,27 @@ Options:
         while (idx >= 0 && Character.isJavaIdentifierPart(lineText.charAt(idx))) idx--
         if (end >= 0 && idx < end) {
             return lineText.substring(idx + 1, end + 1)
+        }
+        return null
+    }
+
+    private static Map resolveVarsQualifiedAtCursor(String lineText, int charNum) {
+        if (!lineText) return null
+        def m = (lineText =~ /(\b\w+)\s*\.\s*([A-Za-z_][A-Za-z0-9_]*)\b/)
+        while (m.find()) {
+            int propStart = m.start(2)
+            int propEnd = m.end(2)
+            int qEnd = m.end(1)
+            int dotIndex = lineText.indexOf('.', qEnd)
+            boolean onMember = (charNum >= propStart && charNum < propEnd)
+            boolean atTokenEnd = (charNum == propEnd)
+            char chAfter = (propEnd < (lineText?.length() ?: 0)) ? lineText.charAt(propEnd) : '\u0000'
+            boolean onMemberEnd = atTokenEnd && !Character.isJavaIdentifierPart(chAfter)
+            boolean onDot = (dotIndex >= 0 && charNum == dotIndex)
+            boolean inWsAfterDot = (dotIndex >= 0 && charNum > dotIndex && charNum < propStart)
+            if (onMember || onMemberEnd || onDot || inWsAfterDot) {
+                return [qualifier: m.group(1), member: m.group(2)]
+            }
         }
         return null
     }
