@@ -28,6 +28,7 @@ class LspServer {
     private File lastProjectRoot = null
     private File lastVarsDirectory = null
     private VarsSymbolIndex lastVarsIndex = VarsSymbolIndex.empty()
+    private Map lastConfig = [:]
     private final Map<String, DocumentState> openDocuments = [:]
 
     private static class DocumentState {
@@ -38,6 +39,7 @@ class LspServer {
         final File projectRoot
         final File varsDirectory
         final VarsSymbolIndex varsIndex
+        final Map config
 
         DocumentState(String uri,
                       SourceUnit parsedUnit,
@@ -45,7 +47,8 @@ class LspServer {
                       File documentFile,
                       File projectRoot,
                       File varsDirectory,
-                      VarsSymbolIndex varsIndex) {
+                      VarsSymbolIndex varsIndex,
+                      Map config) {
             this.uri = uri
             this.parsedUnit = parsedUnit
             this.sourceText = sourceText ?: ""
@@ -53,6 +56,7 @@ class LspServer {
             this.projectRoot = projectRoot
             this.varsDirectory = varsDirectory
             this.varsIndex = varsIndex ?: VarsSymbolIndex.empty()
+            this.config = config ?: [:]
         }
     }
 
@@ -61,7 +65,57 @@ class LspServer {
     }
 
     static void main(String[] args) {
-        new LspServer(new JsonRpcTransport()).run()
+        if (!args || args.length == 0) {
+            printHelp()
+            return
+        }
+        String arg0 = String.valueOf(args[0])
+        if ("-h".equals(arg0) || "--help".equals(arg0)) {
+            printHelp()
+            return
+        }
+        if ("init".equalsIgnoreCase(arg0)) {
+            runInit()
+            return
+        }
+        if ("--stdio".equals(arg0)) {
+            new LspServer(new JsonRpcTransport()).run()
+            return
+        }
+        printHelp()
+    }
+
+    private static void printHelp() {
+        System.out.println("""jenkins-lsp
+
+Usage:
+  jenkins-lsp [command]
+
+Commands:
+  init           Create a .jenkinslsp.groovy in the current directory
+  --stdio        Run the language server over stdio
+
+Options:
+  -h, --help     Show this help text
+""")
+    }
+
+    private static void runInit() {
+        File cwd = new File(System.getProperty("user.dir"))
+        File configFile = new File(cwd, ConfigLoader.CONFIG_NAME)
+        if (configFile.exists()) {
+            System.out.println("Config already exists at " + configFile.absolutePath)
+            return
+        }
+        try {
+            configFile.text = """return [
+    allowStdlibResolution: true,
+]\n"""
+            System.out.println("Wrote " + configFile.absolutePath)
+        } catch (Throwable t) {
+            System.err.println("Failed to write config: " + t.class.name + ": " + t.message)
+            System.exit(1)
+        }
     }
 
     void run() {
@@ -133,10 +187,14 @@ class LspServer {
         VarsSymbolIndex varsIndex = varsDirectory ?
                 VarsSymbolIndex.build(varsDirectory, documentFile, pr.sourceText ?: "") :
                 VarsSymbolIndex.empty()
+        Map config = ConfigLoader.loadForFile(documentFile, new File(System.getProperty("user.dir")))
+        if (config?.allowStdlibResolution) {
+            StdlibSourceIndex.ensureExtracted()
+        }
         if (varsDirectory) {
             Logging.log("Detected vars directory for multi-file lookup: ${varsDirectory}")
         }
-        DocumentState state = new DocumentState(uri, pr.unit, pr.sourceText, documentFile, projectRoot, varsDirectory, varsIndex)
+        DocumentState state = new DocumentState(uri, pr.unit, pr.sourceText, documentFile, projectRoot, varsDirectory, varsIndex, config)
         openDocuments[uri] = state
         applyDocumentState(state)
 
@@ -251,6 +309,24 @@ class LspServer {
                     ])
                     return
                 } else {
+                    if (qualifiedAttempt?.isMethodCall && qualifiedAttempt?.word && isStdlibResolutionAllowed()) {
+                        def stdlibMethod = StdlibSourceIndex.resolveMethod(String.valueOf(qualifiedAttempt.word))
+                        if (stdlibMethod) {
+                            Logging.log("Resolved stdlib method '${qualifiedAttempt.word}' to ${stdlibMethod.uri}:${stdlibMethod.line}:${stdlibMethod.column}")
+                            transport.sendMessage([
+                                jsonrpc: "2.0",
+                                id: message.id,
+                                result: [
+                                    uri: stdlibMethod.uri,
+                                    range: [
+                                        start: [line: stdlibMethod.line, character: stdlibMethod.column],
+                                        end:   [line: stdlibMethod.line, character: stdlibMethod.column + qualifiedAttempt.word.length()]
+                                    ]
+                                ]
+                            ])
+                            return
+                        }
+                    }
                     Logging.log("Qualified property/member lookup at cursor failed; attempting fallback resolution.")
                 }
             }
@@ -454,7 +530,8 @@ class LspServer {
                     "implements".equals(prevWordGeneric) ||
                     prevNonSpaceChar == '(' ||   // cast like (Foo) x
                     nextNonSpaceChar == '.' ||   // static access Foo.SOMETHING
-                    (classExists && Character.isUpperCase(word.charAt(0)))
+                    (classExists && Character.isUpperCase(word.charAt(0))) ||
+                    isLikelyTypeDeclaration(word, lineText, wordEnd)
 
             Logging.log("Context decision for '${word}': looksLikeTypeContext=${looksLikeTypeContext}, classExists=${classExists}, prevWord=${prevWordGeneric}, prevChar='${prevNonSpaceChar == 0 ? "NUL" : prevNonSpaceChar}', nextChar='${nextNonSpaceChar == 0 ? "NUL" : nextNonSpaceChar}'")
 
@@ -497,6 +574,25 @@ class LspServer {
                     ]
                 ])
                 return
+            }
+
+            if (looksLikeTypeContext && isStdlibResolutionAllowed()) {
+                def stdlibClass = StdlibSourceIndex.resolveClass(word)
+                if (stdlibClass) {
+                    Logging.log("Resolved stdlib class '${word}' to ${stdlibClass.uri}:${stdlibClass.line}:${stdlibClass.column}")
+                    transport.sendMessage([
+                        jsonrpc: "2.0",
+                        id: message.id,
+                        result: [
+                            uri: stdlibClass.uri,
+                            range: [
+                                start: [line: stdlibClass.line, character: stdlibClass.column],
+                                end:   [line: stdlibClass.line, character: stdlibClass.column + word.length()]
+                            ]
+                        ]
+                    ])
+                    return
+                }
             }
 
             def varsResult = resolveVarsDefinition(word, lineText, wordStart, wordEnd, isUnqualifiedCall, nextNonSpaceChar)
@@ -698,6 +794,18 @@ class LspServer {
         }
     }
 
+    private static boolean isLikelyTypeDeclaration(String word, String lineText, int wordEnd) {
+        if (!word || !lineText) return false
+        if (!Character.isUpperCase(word.charAt(0))) return false
+        if (wordEnd < 0) return false
+        int idx = wordEnd
+        while (idx < lineText.length() && Character.isWhitespace(lineText.charAt(idx))) idx++
+        if (idx >= lineText.length()) return false
+        char ch = lineText.charAt(idx)
+        if (ch == '<' || ch == '[') return true
+        return Character.isJavaIdentifierStart(ch)
+    }
+
     private static File canonicalFile(File f) {
         if (!f) return null
         try {
@@ -808,5 +916,12 @@ class LspServer {
         this.lastProjectRoot = state.projectRoot
         this.lastVarsDirectory = state.varsDirectory
         this.lastVarsIndex = state.varsIndex ?: VarsSymbolIndex.empty()
+        this.lastConfig = state.config ?: [:]
+    }
+
+    private boolean isStdlibResolutionAllowed() {
+        def allow = lastConfig?.allowStdlibResolution
+        if (allow == null) return true
+        return allow instanceof Boolean ? allow : Boolean.parseBoolean(String.valueOf(allow))
     }
 }

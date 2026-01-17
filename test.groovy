@@ -378,8 +378,7 @@ class LspTestClient {
 }
 // -------- Argument parsing and Example usage (can be adapted) ----------
 def debug = args.any { it == '--debug' || it == '-d' }
-// def lspCmd = "java -jar ./target/hello-world-1.0.0.jar"
-def lspCmd = "java -jar ./target/jenkins-lsp-1.0.0-all.jar"
+def lspCmd = "java -jar ./target/jenkins-lsp-1.0.0-all.jar --stdio"
 LspTestClient.run(lspCmd, debug){ def client ->
     def tuBasics = client.loadTestUnit("./tests/src/jenkinslsp/basics.groovy")
 

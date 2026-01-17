@@ -76,7 +76,10 @@ class MemberResolver {
         // consider whitespace between name and '('
         int scan = Math.min(foundEnd, lineText.length())
         while (scan < lineText.length() && Character.isWhitespace(lineText.charAt(scan))) scan++
-        if (scan < lineText.length() && lineText.charAt(scan) == '(') isMethodCall = true
+        if (scan < lineText.length()) {
+            char ch = lineText.charAt(scan)
+            if (ch == '(' || ch == '{') isMethodCall = true
+        }
         Logging.log("Detected qualified property/member lookup at cursor: ${varName}.${memberName} (isMethodCall: ${isMethodCall})")
 
         // Handle "this"
@@ -89,14 +92,14 @@ class MemberResolver {
                 def res = AstNavigator.findFieldOrPropertyInHierarchy(classNode, memberName, lines, mode, callArgs, unit)
                 if (res) {
                     Logging.log("Resolved this.${memberName} to line ${res.line}, column ${res.column}")
-                    return [found: true, matchAtCursor: true, debug: "this.${memberName}->${classNode.name}", line: res.line, column: res.column, word: memberName]
+                    return [found: true, matchAtCursor: true, debug: "this.${memberName}->${classNode.name}", line: res.line, column: res.column, word: memberName, isMethodCall: isMethodCall]
                 } else {
                     Logging.log("this.${memberName} could not be resolved on class ${classNode.name}")
-                    return [found: false, matchAtCursor: true, debug: "this.${memberName} not found"]
+                    return [found: false, matchAtCursor: true, debug: "this.${memberName} not found", word: memberName, isMethodCall: isMethodCall]
                 }
             } else {
                 Logging.log("this reference but classNode not found")
-                return [found: false, matchAtCursor: true, debug: "this but no classNode"]
+                return [found: false, matchAtCursor: true, debug: "this but no classNode", word: memberName, isMethodCall: isMethodCall]
             }
         }
 
@@ -155,7 +158,7 @@ class MemberResolver {
                 def res = AstNavigator.findFieldOrPropertyInHierarchy(classNode, memberName, lines, mode, callArgs, unit)
                 if (res) {
                     Logging.log("Resolved ${varName}.${memberName} to line ${res.line}, column ${res.column}")
-                    return [found: true, matchAtCursor: true, debug: "${varName}.${memberName}->${type}", line: res.line, column: res.column, word: memberName]
+                    return [found: true, matchAtCursor: true, debug: "${varName}.${memberName}->${type}", line: res.line, column: res.column, word: memberName, isMethodCall: isMethodCall]
                 } else {
                     Logging.log("${varName}.${memberName} could not be resolved on class ${type}")
                     // DO NOT bail out: try dynamic fallbacks below
@@ -171,13 +174,13 @@ class MemberResolver {
         def mapKey = resolveMapKeyFromAssignment(unit, lines, varName, memberName)
         if (mapKey) {
             Logging.log("Map-literal key resolution succeeded for ${varName}.${memberName} at ${mapKey.line}:${mapKey.column}")
-            return [found: true, matchAtCursor: true, debug: "map ${varName}[${memberName}]", line: mapKey.line, column: mapKey.column, word: memberName]
+            return [found: true, matchAtCursor: true, debug: "map ${varName}[${memberName}]", line: mapKey.line, column: mapKey.column, word: memberName, isMethodCall: isMethodCall]
         }
         Logging.log("Map-literal key resolution failed for ${varName}.${memberName}; trying property assignment scan")
         def propAssign = resolveTopLevelPropertyAssignment(unit, lines, varName, memberName)
         if (propAssign) {
             Logging.log("Property-assignment resolution succeeded for ${varName}.${memberName} at ${propAssign.line}:${propAssign.column}")
-            return [found: true, matchAtCursor: true, debug: "assign ${varName}.${memberName}", line: propAssign.line, column: propAssign.column, word: memberName]
+            return [found: true, matchAtCursor: true, debug: "assign ${varName}.${memberName}", line: propAssign.line, column: propAssign.column, word: memberName, isMethodCall: isMethodCall]
         }
 
         // Final ultra-relaxed fallback: if we still didn't find a key, try locating the
@@ -214,7 +217,7 @@ class MemberResolver {
         }
 
         Logging.log("Dynamic resolution failed for ${varName}.${memberName}")
-        return [found: false, matchAtCursor: true, debug: "no type for ${varName}"]
+        return [found: false, matchAtCursor: true, debug: "no type for ${varName}", word: memberName, isMethodCall: isMethodCall]
     }
 
     /**
