@@ -27,6 +27,7 @@ class LspTestClient {
         }
         void assertGoto(Map args=[:]) {
             try {
+                long startNanos = System.nanoTime()
                 def from = wrangleLocation(args.from)
                 def to = wrangleLocation(args.to)
                 String expectedUri = args.targetUri
@@ -44,7 +45,7 @@ class LspTestClient {
                 assert normActual == normExpected : "Expected definition in ${expectedUri} but got ${actualUri}"
                 def actual = [line: res.range.start.line, col: res.range.start.character]
                 assert actual.toString() == to.toString() : "Expected to resolve to ${to} but got ${actual}"
-                print " ...OK\n"
+                print okWithMs(startNanos)
             } catch (Throwable e) {
                 testErrors << "[${this.name}] assertGoto failed: $args.from -> $args.to: While testing ${args.test}. ${e.message}"
                 println " ...FAILED"
@@ -64,11 +65,12 @@ class LspTestClient {
         }
         void assertNoGoto(Map args=[:]) {
             try {
+                long startNanos = System.nanoTime()
                 def from = wrangleLocation(args.from)
                 print "[${this.name}] Asserting NoGoTo ($args.from) "
                 def res = sendDefinition(uri, from.line, from.col)
                 assert res == null : "A definition was found when it shouldn't have to ${[line: res.range.start.line, col: res.range.start.character]}"
-                print " ...OK\n"
+                print okWithMs(startNanos)
             } catch (Throwable e) {
                 testErrors << "[${this.name}] assertNoGoto failed: $args.from: While testing ${args.test}. ${e.message}"
                 println " ...FAILED"
@@ -76,10 +78,11 @@ class LspTestClient {
         }
         void assertDiagnostic(Map args) {
             try {
+                long startNanos = System.nanoTime()
                 print "[${this.name}] Asserting diagnostic: ${args.msg} "
                 def diags = getDiagnostics(uri)
                 assert diags.find { formatDiagnostic(it) == args.msg } : "\nExpected diagnostic:\n${args.msg}\n\nActual:\n$diags"
-                print "  ...OK\n"
+                print okWithMs(startNanos, "  ")
             } catch (Throwable e) {
                 testErrors << "[${this.name}] assertDiagnostic failed: While testing ${args.test}. ${e.message}"
                 println " ...FAILED"
@@ -93,10 +96,11 @@ class LspTestClient {
         }
         void assertNoDiagnostic() {
             try {
+                long startNanos = System.nanoTime()
                 print "[${this.name}] Asserting 0 diagnostics "
                 def diags = getDiagnostics(uri)
                 assert diags.size() == 0 : "Expected 0 diagnostics, found ${diags.size()}:\n${diags}"
-                print "  ...OK\n"
+                print okWithMs(startNanos, "  ")
             } catch (Throwable e) {
                 testErrors << "[${this.name}] assertNoDiagnostic failed: ${e.message}"
                 println " ...FAILED"
@@ -114,6 +118,7 @@ class LspTestClient {
             if (expected.isEmpty()) throw new IllegalArgumentException("assertCompletion requires non-empty 'suggestions'")
 
             try {
+                long startNanos = System.nanoTime()
                 // Prepare new content by appending the input as a new line at the end
                 String original = f.text
                 String newText = original + (original.endsWith("\n") ? "" : "\n") + input
@@ -147,7 +152,7 @@ class LspTestClient {
                 print "[${this.name}] Asserting Completion for '${input}' "
                 def missing = expected.findAll { !(it in got) }
                 assert missing.isEmpty() : "Missing suggestions ${missing}; got: ${got as List}"
-                print " ...OK\n"
+                print okWithMs(startNanos)
             } catch (Throwable e) {
                 testErrors << "[${this.name}] assertCompletion failed for input='${args.input}': ${e.message}"
                 println " ...FAILED"
@@ -158,6 +163,10 @@ class LspTestClient {
                     Thread.sleep(100)
                 } catch (Throwable ignore) {}
             }
+        }
+        private static String okWithMs(long startNanos, String prefix = " ") {
+            long ms = (System.nanoTime() - startNanos) / 1_000_000L
+            return "${prefix}...OK (${ms}ms)\n"
         }
     }
     static def getFilenameWithoutExtension(String path) {
