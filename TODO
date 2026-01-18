@@ -2,7 +2,7 @@
 [X] Add basic GoTo
 [X] Add basic autocompletion
 [X] Support Multiple Files
+[X] Jump to Stdlib internals
 [ ] Add wrongReturnType and returnUnknownIdentifier Errors/Warnings
 [ ] Find References
-[ ] Jump to Stdlib internals
 [ ] Jump to Jenkins internals
