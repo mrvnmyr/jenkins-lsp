@@ -11,6 +11,7 @@ def call(Map args=[:], Closure body = null) {
     ])
     foo.helperStep()
     foo.askBarForDouble()
+    foo.missingHelper()
     if (body) {
         body()
     }

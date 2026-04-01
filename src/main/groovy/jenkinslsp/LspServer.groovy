@@ -1217,15 +1217,24 @@ Options:
             if (!scriptInfo) return
             String methodName = call.methodAsString
             if (!methodName) return
+            String key = "${scriptName}.${methodName}@${call.lineNumber}:${call.columnNumber}"
+            if (!seenKeys.add(key)) return
             Map methodInfo = scriptInfo.methodsByName?.get(methodName)
-            if (!methodInfo) return
+            if (!methodInfo) {
+                // Emit a specific diagnostic for cross-file vars calls that target
+                // a known vars script but a missing helper method on that script.
+                diagnostics << [
+                    message: buildMissingMethodMessage(scriptName, methodName),
+                    line: Math.max(0, (call.lineNumber ?: 1) - 1),
+                    column: Math.max(0, (call.columnNumber ?: 1) - 1)
+                ]
+                return
+            }
             int required = safeInt(methodInfo.requiredArgs)
             if (required <= 0) return
             int actual = countArguments(call.arguments)
             if (actual < 0) return
             if (actual >= required) return
-            String key = "${scriptName}.${methodName}@${call.lineNumber}:${call.columnNumber}"
-            if (!seenKeys.add(key)) return
             diagnostics << [
                 message: buildArityMessage(methodName, required, actual),
                 line: Math.max(0, (call.lineNumber ?: 1) - 1),
@@ -1259,6 +1268,10 @@ Options:
             String reqText = "${required} argument" + (required == 1 ? "" : "s")
             String actualText = (actual == 1 ? "1 was" : "${actual} were")
             return "Method '${methodName}' requires at least ${reqText} but ${actualText} provided"
+        }
+
+        private static String buildMissingMethodMessage(String scriptName, String methodName) {
+            return "Vars script '${scriptName}' has no method '${methodName}'"
         }
     }
 
