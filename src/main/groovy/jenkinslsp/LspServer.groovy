@@ -333,6 +333,22 @@ Options:
                     ])
                     return
                 } else {
+                    def importedMember = resolveImportedSourceMemberDefinition(qualifiedAttempt.qualifier, qualifiedAttempt.word, qualifiedAttempt.isMethodCall)
+                    if (importedMember) {
+                        Logging.log("Resolved imported source member '${qualifiedAttempt.qualifier}.${qualifiedAttempt.word}' to ${importedMember.line}:${importedMember.column} in ${importedMember.uri}")
+                        transport.sendMessage([
+                            jsonrpc: "2.0",
+                            id: message.id,
+                            result: [
+                                uri: importedMember.uri,
+                                range: [
+                                    start: [line: importedMember.line, character: importedMember.column],
+                                    end:   [line: importedMember.line, character: importedMember.column + (importedMember.wordLength ?: qualifiedAttempt.word.length())]
+                                ]
+                            ]
+                        ])
+                        return
+                    }
                     if (qualifiedAttempt?.isMethodCall && qualifiedAttempt?.word && isStdlibResolutionAllowed()) {
                         def stdlibMethod = StdlibSourceIndex.resolveMethod(String.valueOf(qualifiedAttempt.word))
                         if (stdlibMethod) {
@@ -706,33 +722,47 @@ Options:
     }
 
     /**
+     * Resolve a member access on an explicitly imported project class, such as
+     * `ImportedSupport.renderLabel(...)` inside a vars script.
+     */
+    private Map resolveImportedSourceMemberDefinition(String qualifier, String memberName, boolean isMethodCall) {
+        if (!qualifier || !memberName || !lastProjectRoot) return null
+        try {
+            for (Map importInfo : collectExplicitImports()) {
+                if (!(qualifier in [importInfo.simpleName, importInfo.alias].findAll { it })) {
+                    continue
+                }
+                File sourceFile = findProjectSourceFile(importInfo.fqcn as String)
+                if (!sourceFile) {
+                    continue
+                }
+                Map resolved = resolveProjectSourceMember(sourceFile, importInfo.simpleName as String, memberName, isMethodCall)
+                if (resolved) {
+                    return resolved
+                }
+            }
+        } catch (Throwable t) {
+            Logging.log("Imported source member lookup failed for '${qualifier}.${memberName}': ${t.class.name}: ${t.message}")
+        }
+        return null
+    }
+
+    /**
      * Resolve an explicitly imported class back to its project source file so
      * go-to-definition can cross from `vars/` into a shared-library `src/` tree.
      */
     private Map resolveImportedSourceDefinition(String word) {
         if (!word || !lastProjectRoot) return null
         try {
-            // Scan the source text directly so unresolved-yet-valid imports still
-            // participate in cross-file go-to-definition.
-            for (String line : (lastSourceText ?: "").readLines()) {
-                def importMatch = (line =~ /^\s*import\s+([A-Za-z_][A-Za-z0-9_\.]*)(?:\s+as\s+([A-Za-z_][A-Za-z0-9_]*))?\s*$/)
-                if (!importMatch.find()) {
+            for (Map importInfo : collectExplicitImports()) {
+                if (!(word in [importInfo.simpleName, importInfo.alias].findAll { it })) {
                     continue
                 }
-                String fqcn = importMatch.group(1)
-                if (!fqcn || fqcn.endsWith(".*")) {
-                    continue
-                }
-                String importedName = fqcn.tokenize('.').last()
-                String alias = importMatch.group(2)
-                if (!(word in [importedName, alias].findAll { it })) {
-                    continue
-                }
-                File sourceFile = findProjectSourceFile(fqcn)
+                File sourceFile = findProjectSourceFile(importInfo.fqcn as String)
                 if (!sourceFile) {
                     continue
                 }
-                Map resolved = resolveProjectSourceSymbol(sourceFile, importedName)
+                Map resolved = resolveProjectSourceSymbol(sourceFile, importInfo.simpleName as String)
                 if (resolved) {
                     return resolved
                 }
@@ -741,6 +771,30 @@ Options:
             Logging.log("Imported source lookup failed for '${word}': ${t.class.name}: ${t.message}")
         }
         return null
+    }
+
+    /**
+     * Parse explicit imports from the current document text so imported project
+     * symbols can resolve even when the file still contains incomplete code.
+     */
+    private List<Map> collectExplicitImports() {
+        List<Map> imports = []
+        for (String line : (lastSourceText ?: "").readLines()) {
+            def importMatch = (line =~ /^\s*import\s+([A-Za-z_][A-Za-z0-9_\.]*)(?:\s+as\s+([A-Za-z_][A-Za-z0-9_]*))?\s*$/)
+            if (!importMatch.find()) {
+                continue
+            }
+            String fqcn = importMatch.group(1)
+            if (!fqcn || fqcn.endsWith(".*")) {
+                continue
+            }
+            imports << [
+                fqcn: fqcn,
+                simpleName: fqcn.tokenize('.').last(),
+                alias: importMatch.group(2)
+            ]
+        }
+        return imports
     }
 
     /**
@@ -802,6 +856,38 @@ Options:
             ]
         } catch (Throwable t) {
             Logging.log("Unable to resolve imported source symbol '${symbolName}' in ${sourceFile}: ${t.class.name}: ${t.message}")
+            return null
+        }
+    }
+
+    /**
+     * Resolve a method/property on a class declared in a project source file.
+     */
+    private Map resolveProjectSourceMember(File sourceFile, String className, String memberName, boolean isMethodCall) {
+        if (!sourceFile || !className || !memberName) return null
+        try {
+            String text = sourceFile.getText("UTF-8")
+            List<String> lines = (text ?: "").readLines()
+            Parser.ParseResult pr = Parser.parseGroovy(text ?: "", findProjectSourceRoots(lastProjectRoot))
+            ClassNode classNode = (pr?.unit?.AST?.classes ?: Collections.emptyList()).find { ClassNode cls ->
+                return cls?.nameWithoutPackage == className
+            }
+            if (!classNode) {
+                return null
+            }
+            String mode = isMethodCall ? "preferMethod" : "any"
+            Map member = AstNavigator.findFieldOrPropertyInHierarchy(classNode, memberName, lines, mode, null, pr.unit)
+            if (!member) {
+                return null
+            }
+            return [
+                uri: sourceFile.toURI().toString(),
+                line: member.line as int,
+                column: member.column as int,
+                wordLength: member.word?.length() ?: memberName.length()
+            ]
+        } catch (Throwable t) {
+            Logging.log("Unable to resolve imported source member '${className}.${memberName}' in ${sourceFile}: ${t.class.name}: ${t.message}")
             return null
         }
     }

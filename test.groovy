@@ -444,6 +444,7 @@ LspTestClient.run(lspCmd, debug){ def client ->
 
     def tuVarsImportedSrc = client.loadTestUnit("./tests/vars/imported-src.groovy")
     tuVarsImportedSrc.assertGoto(from: "7:12", to: "6:7", targetFile: "./tests/src/jenkinslsp/support/ImportedSupport.groovy", test: "resolving imported src class 'ImportedSupport' from vars script")
+    tuVarsImportedSrc.assertGoto(from: "7:28", to: "8:19", targetFile: "./tests/src/jenkinslsp/support/ImportedSupport.groovy", test: "resolving imported src method 'renderLabel' from vars script")
     tuVarsImportedSrc.assertNoDiagnostic()
 
     def tuPipelinesJobDslBasic = client.loadTestUnit("./tests/pipelines/job-dsl-basic.groovy")
