@@ -5,8 +5,10 @@ import org.codehaus.groovy.ast.ClassNode
 import org.codehaus.groovy.ast.CodeVisitorSupport
 import org.codehaus.groovy.ast.MethodNode
 import org.codehaus.groovy.ast.expr.ArgumentListExpression
+import org.codehaus.groovy.ast.expr.ClassExpression
 import org.codehaus.groovy.ast.expr.Expression
 import org.codehaus.groovy.ast.expr.MethodCallExpression
+import org.codehaus.groovy.ast.expr.StaticMethodCallExpression
 import org.codehaus.groovy.ast.expr.TupleExpression
 import org.codehaus.groovy.ast.expr.VariableExpression
 import org.codehaus.groovy.control.SourceUnit
@@ -207,6 +209,10 @@ Options:
         def varsArityErrors = collectVarsArityDiagnostics(pr.unit, documentFile, state.varsIndex)
         if (varsArityErrors) {
             diagSources.addAll(varsArityErrors)
+        }
+        def importedSourceErrors = collectImportedSourceMethodDiagnostics(pr.unit, documentFile)
+        if (importedSourceErrors) {
+            diagSources.addAll(importedSourceErrors)
         }
 
         def diagnostics = []
@@ -798,6 +804,88 @@ Options:
     }
 
     /**
+     * Collect vars-file diagnostics for imported project classes when the call
+     * names a missing method or omits required arguments.
+     */
+    private List<Map> collectImportedSourceMethodDiagnostics(SourceUnit unit, File documentFile) {
+        if (!unit?.AST) return []
+        if (!documentFile?.parentFile) return []
+        if (!"vars".equals(documentFile.parentFile.name)) return []
+
+        Map<String, ImportedSourceClassInfo> importedClasses = buildImportedSourceClassInfoByQualifier()
+        if (importedClasses.isEmpty()) return []
+
+        List<Map> diagnostics = []
+        ImportedSourceMethodDiagnosticVisitor visitor = new ImportedSourceMethodDiagnosticVisitor(importedClasses, diagnostics)
+        try {
+            unit.AST.statementBlock?.visit(visitor)
+        } catch (Throwable ignore) {}
+        for (MethodNode method : unit.AST.methods ?: Collections.emptyList()) {
+            try {
+                method?.code?.visit(visitor)
+            } catch (Throwable ignore) {}
+        }
+        for (ClassNode cls : unit.AST.classes ?: Collections.emptyList()) {
+            for (MethodNode method : cls.methods ?: Collections.emptyList()) {
+                try {
+                    method?.code?.visit(visitor)
+                } catch (Throwable ignore) {}
+            }
+        }
+        return diagnostics
+    }
+
+    /**
+     * Build a per-qualifier view of imported project classes so vars-file
+     * diagnostics can validate calls like ImportedSupport.renderLabel(...).
+     */
+    private Map<String, ImportedSourceClassInfo> buildImportedSourceClassInfoByQualifier() {
+        Map<String, ImportedSourceClassInfo> importedClasses = [:]
+        for (Map importInfo : collectExplicitImports()) {
+            File sourceFile = findProjectSourceFile(importInfo.fqcn as String)
+            if (!sourceFile) {
+                continue
+            }
+            ImportedSourceClassInfo classInfo = loadImportedSourceClassInfo(sourceFile, importInfo.simpleName as String, importInfo.alias as String)
+            if (!classInfo) {
+                continue
+            }
+            importedClasses[classInfo.simpleName] = classInfo
+            if (classInfo.alias) {
+                importedClasses[classInfo.alias] = classInfo
+            }
+        }
+        return importedClasses
+    }
+
+    /**
+     * Parse an imported project class once and keep only the method signatures
+     * needed for vars-file diagnostics.
+     */
+    private ImportedSourceClassInfo loadImportedSourceClassInfo(File sourceFile, String className, String alias) {
+        if (!sourceFile || !className) return null
+        try {
+            String text = sourceFile.getText("UTF-8")
+            Parser.ParseResult pr = Parser.parseGroovy(text ?: "", findProjectSourceRoots(lastProjectRoot))
+            ClassNode classNode = (pr?.unit?.AST?.classes ?: Collections.emptyList()).find { ClassNode cls ->
+                return cls?.nameWithoutPackage == className
+            }
+            if (!classNode) {
+                return null
+            }
+            Map<String, List<ImportedSourceMethodSignature>> methodsByName = [:]
+            for (MethodNode method : classNode.methods ?: Collections.emptyList()) {
+                if (!method?.name) continue
+                methodsByName.computeIfAbsent(method.name) { [] as List<ImportedSourceMethodSignature> } << new ImportedSourceMethodSignature(method)
+            }
+            return new ImportedSourceClassInfo(className, alias, sourceFile, methodsByName)
+        } catch (Throwable t) {
+            Logging.log("Unable to load imported source class info for '${className}' from ${sourceFile}: ${t.class.name}: ${t.message}")
+            return null
+        }
+    }
+
+    /**
      * Shared library projects commonly keep Groovy sources under `src/`; the
      * test fixtures in this repo additionally use `tests/src`.
      */
@@ -889,6 +977,188 @@ Options:
         } catch (Throwable t) {
             Logging.log("Unable to resolve imported source member '${className}.${memberName}' in ${sourceFile}: ${t.class.name}: ${t.message}")
             return null
+        }
+    }
+
+    private static class ImportedSourceClassInfo {
+        final String simpleName
+        final String alias
+        final File sourceFile
+        final Map<String, List<ImportedSourceMethodSignature>> methodsByName
+
+        ImportedSourceClassInfo(String simpleName, String alias, File sourceFile, Map<String, List<ImportedSourceMethodSignature>> methodsByName) {
+            this.simpleName = simpleName
+            this.alias = alias
+            this.sourceFile = sourceFile
+            this.methodsByName = methodsByName ?: [:]
+        }
+    }
+
+    private static class ImportedSourceMethodSignature {
+        final int requiredArgs
+
+        ImportedSourceMethodSignature(MethodNode method) {
+            int required = 0
+            for (def parameter : method?.parameters ?: []) {
+                if (parameter != null && !parameter.hasInitialExpression()) {
+                    required++
+                }
+            }
+            this.requiredArgs = required
+        }
+
+        boolean accepts(int actual) {
+            return actual >= requiredArgs
+        }
+    }
+
+    /**
+     * Validate method calls on imported project classes from vars files.
+     */
+    private static class ImportedSourceMethodDiagnosticVisitor extends CodeVisitorSupport {
+        private final Map<String, ImportedSourceClassInfo> importedClasses
+        private final List<Map> diagnostics
+        private final Set<String> seenKeys = new HashSet<>()
+
+        ImportedSourceMethodDiagnosticVisitor(Map<String, ImportedSourceClassInfo> importedClasses, List<Map> diagnostics) {
+            this.importedClasses = importedClasses ?: [:]
+            this.diagnostics = (diagnostics != null) ? diagnostics : []
+        }
+
+        @Override
+        void visitMethodCallExpression(MethodCallExpression call) {
+            try {
+                checkMethodCall(call)
+            } catch (Throwable ignore) {}
+            super.visitMethodCallExpression(call)
+        }
+
+        @Override
+        void visitStaticMethodCallExpression(StaticMethodCallExpression call) {
+            try {
+                checkStaticMethodCall(call)
+            } catch (Throwable ignore) {}
+            super.visitStaticMethodCallExpression(call)
+        }
+
+        private void checkMethodCall(MethodCallExpression call) {
+            if (!call) return
+            if (importedClasses.isEmpty()) return
+            Expression obj = call.objectExpression
+            String qualifier = qualifierNameFor(obj)
+            if (!qualifier) return
+            ImportedSourceClassInfo classInfo = importedClasses[qualifier]
+            if (!classInfo) return
+
+            String methodName = call.methodAsString
+            if (!methodName) return
+            int actual = countArguments(call.arguments)
+            if (actual < 0) return
+
+            String key = "${qualifier}.${methodName}@${call.lineNumber}:${call.columnNumber}"
+            if (!seenKeys.add(key)) return
+
+            List<ImportedSourceMethodSignature> signatures = classInfo.methodsByName?.get(methodName)
+            if (!signatures) {
+                diagnostics << [
+                    message: buildMissingMethodMessage(classInfo.simpleName, methodName),
+                    line: Math.max(0, (call.lineNumber ?: 1) - 1),
+                    column: Math.max(0, (call.columnNumber ?: 1) - 1)
+                ]
+                return
+            }
+
+            boolean ok = signatures.any { ImportedSourceMethodSignature signature ->
+                return signature.accepts(actual)
+            }
+            if (ok) return
+
+            int required = signatures.collect { ImportedSourceMethodSignature signature ->
+                return signature.requiredArgs
+            }.min() ?: 0
+            diagnostics << [
+                message: buildArityMessage(classInfo.simpleName, methodName, required, actual),
+                line: Math.max(0, (call.lineNumber ?: 1) - 1),
+                column: Math.max(0, (call.columnNumber ?: 1) - 1)
+            ]
+        }
+
+        private void checkStaticMethodCall(StaticMethodCallExpression call) {
+            if (!call) return
+            if (importedClasses.isEmpty()) return
+            String qualifier = call.ownerType?.nameWithoutPackage
+            if (!qualifier) return
+            ImportedSourceClassInfo classInfo = importedClasses[qualifier]
+            if (!classInfo) return
+
+            String methodName = call.method
+            if (!methodName) return
+            int actual = countArguments(call.arguments)
+            if (actual < 0) return
+
+            String key = "${qualifier}.${methodName}@${call.lineNumber}:${call.columnNumber}"
+            if (!seenKeys.add(key)) return
+
+            List<ImportedSourceMethodSignature> signatures = classInfo.methodsByName?.get(methodName)
+            if (!signatures) {
+                diagnostics << [
+                    message: buildMissingMethodMessage(classInfo.simpleName, methodName),
+                    line: Math.max(0, (call.lineNumber ?: 1) - 1),
+                    column: Math.max(0, (call.columnNumber ?: 1) - 1)
+                ]
+                return
+            }
+
+            boolean ok = signatures.any { ImportedSourceMethodSignature signature ->
+                return signature.accepts(actual)
+            }
+            if (ok) return
+
+            int required = signatures.collect { ImportedSourceMethodSignature signature ->
+                return signature.requiredArgs
+            }.min() ?: 0
+            diagnostics << [
+                message: buildArityMessage(classInfo.simpleName, methodName, required, actual),
+                line: Math.max(0, (call.lineNumber ?: 1) - 1),
+                column: Math.max(0, (call.columnNumber ?: 1) - 1)
+            ]
+        }
+
+        /**
+         * Imported project classes can appear either as plain variables or as
+         * class expressions once Groovy resolves the static receiver.
+         */
+        private String qualifierNameFor(Expression obj) {
+            if (obj instanceof VariableExpression) {
+                VariableExpression qualifierExpr = (VariableExpression) obj
+                if (qualifierExpr.isThisExpression()) return null
+                return qualifierExpr.name
+            }
+            if (obj instanceof ClassExpression) {
+                return ((ClassExpression) obj).type?.nameWithoutPackage
+            }
+            return null
+        }
+
+        private static int countArguments(Expression args) {
+            if (args == null || args == MethodCallExpression.NO_ARGUMENTS) return 0
+            if (args instanceof ArgumentListExpression) {
+                return ((ArgumentListExpression) args).expressions?.size() ?: 0
+            }
+            if (args instanceof TupleExpression) {
+                return ((TupleExpression) args).expressions?.size() ?: 0
+            }
+            return 1
+        }
+
+        private static String buildMissingMethodMessage(String className, String methodName) {
+            return "Imported src class '${className}' has no method '${methodName}'"
+        }
+
+        private static String buildArityMessage(String className, String methodName, int required, int actual) {
+            String reqText = "${required} argument" + (required == 1 ? "" : "s")
+            String actualText = (actual == 1 ? "1 was" : "${actual} were")
+            return "Method '${methodName}' on imported src class '${className}' requires at least ${reqText} but ${actualText} provided"
         }
     }
 

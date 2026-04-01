@@ -447,6 +447,10 @@ LspTestClient.run(lspCmd, debug){ def client ->
     tuVarsImportedSrc.assertGoto(from: "7:28", to: "8:19", targetFile: "./tests/src/jenkinslsp/support/ImportedSupport.groovy", test: "resolving imported src method 'renderLabel' from vars script")
     tuVarsImportedSrc.assertNoDiagnostic()
 
+    def tuVarsImportedSrcErrors = client.loadTestUnit("./tests/vars/imported-src-errors.groovy")
+    tuVarsImportedSrcErrors.assertDiagnostic(msg: """{message=Imported src class 'ImportedSupport' has no method 'renderMissing', range={end={character=5, line=6}, start={character=4, line=6}}, severity=1, source=groovy-lsp}""", test: "detect missing imported src method from vars script")
+    tuVarsImportedSrcErrors.assertDiagnostic(msg: """{message=Method 'renderLabel' on imported src class 'ImportedSupport' requires at least 1 argument but 0 were provided, range={end={character=5, line=7}, start={character=4, line=7}}, severity=1, source=groovy-lsp}""", test: "detect missing imported src arguments from vars script")
+
     def tuPipelinesJobDslBasic = client.loadTestUnit("./tests/pipelines/job-dsl-basic.groovy")
     tuPipelinesJobDslBasic.assertGoto(from: "24:8", to: "21:1", test: "resolving global variable 'somedir'")
     tuPipelinesJobDslBasic.assertGoto(from: "28:26", to: "21:1", test: "resolving global variable 'somedir' in a string literal without braces")
