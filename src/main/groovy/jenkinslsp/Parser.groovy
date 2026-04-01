@@ -48,7 +48,7 @@ class Parser {
         }
     }
 
-    static ParseResult parseGroovy(String sourceText) {
+    static ParseResult parseGroovy(String sourceText, List<File> sourceRoots = Collections.emptyList()) {
         Logging.debug("Parsing Groovy source: ${sourceText}")
 
         // --- PATCH: make parser tolerant to trailing '.' so AST is still built ---
@@ -76,7 +76,20 @@ class Parser {
 
         def diagnostics = []
         def config = new CompilerConfiguration()
-        def loader = new GroovyClassLoader()
+        // Add project-local source roots so imports from Jenkins Shared Library
+        // `src/` trees can resolve during semantic analysis.
+        List<String> classpathEntries = (sourceRoots ?: Collections.emptyList()).collect { File root ->
+            return root?.absolutePath
+        }.findAll { String path ->
+            return path != null && path.length() > 0
+        }.unique()
+        if (classpathEntries) {
+            config.setClasspathList(classpathEntries)
+        }
+        def loader = new GroovyClassLoader(Thread.currentThread().contextClassLoader, config, true)
+        classpathEntries.each { String path ->
+            loader.addClasspath(path)
+        }
         def unit = new SourceUnit("Script.groovy", effectiveText, config, loader, null)
         try {
             unit.parse()

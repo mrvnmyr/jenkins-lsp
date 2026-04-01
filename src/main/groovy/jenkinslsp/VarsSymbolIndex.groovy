@@ -3,6 +3,7 @@ package jenkinslsp
 import org.codehaus.groovy.ast.MethodNode
 import org.codehaus.groovy.ast.Parameter
 import java.io.IOException
+import java.util.Collections
 
 /**
  * Small helper that indexes Groovy scripts that live inside a Jenkins
@@ -46,7 +47,7 @@ class VarsSymbolIndex {
         return new VarsSymbolIndex([:])
     }
 
-    static VarsSymbolIndex build(File varsDir, File openFile, String openFileContents) {
+    static VarsSymbolIndex build(File varsDir, File openFile, String openFileContents, List<File> sourceRoots = Collections.emptyList()) {
         if (!varsDir || !varsDir.isDirectory()) {
             return VarsSymbolIndex.empty()
         }
@@ -72,7 +73,9 @@ class VarsSymbolIndex {
                     text = f.getText("UTF-8")
                 }
                 List<String> lines = (text ?: "").readLines()
-                Parser.ParseResult pr = Parser.parseGroovy(text ?: "")
+                // Parse vars files with the same project source roots as the open
+                // document so imported library classes resolve consistently.
+                Parser.ParseResult pr = Parser.parseGroovy(text ?: "", sourceRoots)
                 Map entryPoint = findEntryPoint(pr, lines)
                 Map<String, Map> methodMap = collectTopLevelMethods(pr, lines)
                 String uri = f.toURI().toString()

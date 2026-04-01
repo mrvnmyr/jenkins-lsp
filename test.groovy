@@ -442,6 +442,10 @@ LspTestClient.run(lspCmd, debug){ def client ->
     tuVarsFoo.assertGoto(from: "18:13", to: "20:5", targetFile: "./tests/vars/bar.groovy", test: "resolving bar.helperFromBar(...) from foo.groovy")
     tuVarsFoo.assertNoDiagnostic()
 
+    def tuVarsImportedSrc = client.loadTestUnit("./tests/vars/imported-src.groovy")
+    tuVarsImportedSrc.assertGoto(from: "7:12", to: "6:7", targetFile: "./tests/src/jenkinslsp/support/ImportedSupport.groovy", test: "resolving imported src class 'ImportedSupport' from vars script")
+    tuVarsImportedSrc.assertNoDiagnostic()
+
     def tuPipelinesJobDslBasic = client.loadTestUnit("./tests/pipelines/job-dsl-basic.groovy")
     tuPipelinesJobDslBasic.assertGoto(from: "24:8", to: "21:1", test: "resolving global variable 'somedir'")
     tuPipelinesJobDslBasic.assertGoto(from: "28:26", to: "21:1", test: "resolving global variable 'somedir' in a string literal without braces")

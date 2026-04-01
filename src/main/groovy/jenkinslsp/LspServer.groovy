@@ -14,6 +14,7 @@ import java.io.File
 import java.io.IOException
 import java.net.URI
 import java.util.HashSet
+import java.util.Collections
 import java.util.Set
 
 /**
@@ -180,12 +181,13 @@ Options:
         // Avoid dumping the whole file to stderr which can block under heavy I/O.
         Logging.debug("  Content length: ${(content ?: '').length()} chars")
 
-        def pr = Parser.parseGroovy(content ?: "")
         File documentFile = fileFromUri(uri)
         File projectRoot = findProjectRoot(documentFile)
+        List<File> projectSourceRoots = findProjectSourceRoots(projectRoot)
+        def pr = Parser.parseGroovy(content ?: "", projectSourceRoots)
         File varsDirectory = determineVarsDirectory(documentFile, projectRoot)
         VarsSymbolIndex varsIndex = varsDirectory ?
-                VarsSymbolIndex.build(varsDirectory, documentFile, pr.sourceText ?: "") :
+                VarsSymbolIndex.build(varsDirectory, documentFile, pr.sourceText ?: "", projectSourceRoots) :
                 VarsSymbolIndex.empty()
         Map config = ConfigLoader.loadForFile(documentFile, new File(System.getProperty("user.dir")))
         if (config?.allowStdlibResolution) {
@@ -580,6 +582,23 @@ Options:
                 }
             }
 
+            def importedSourceRes = resolveImportedSourceDefinition(word)
+            if (importedSourceRes) {
+                Logging.log("Resolved imported source '${word}' to ${importedSourceRes.line}:${importedSourceRes.column} in ${importedSourceRes.uri}")
+                transport.sendMessage([
+                    jsonrpc: "2.0",
+                    id: message.id,
+                    result: [
+                        uri: importedSourceRes.uri,
+                        range: [
+                            start: [line: importedSourceRes.line, character: importedSourceRes.column],
+                            end:   [line: importedSourceRes.line, character: importedSourceRes.column + (importedSourceRes.wordLength ?: word.length())]
+                        ]
+                    ]
+                ])
+                return
+            }
+
             // Prefer classes/methods (when we didn't early-return with a var)
             def topRes = AstNavigator.findTopLevelClassOrMethod(lastParsedUnit, word, lines)
             if (topRes) {
@@ -684,6 +703,107 @@ Options:
             Logging.log("vars lookup failed for '${word}': ${t.class.name}: ${t.message}")
         }
         return null
+    }
+
+    /**
+     * Resolve an explicitly imported class back to its project source file so
+     * go-to-definition can cross from `vars/` into a shared-library `src/` tree.
+     */
+    private Map resolveImportedSourceDefinition(String word) {
+        if (!word || !lastProjectRoot) return null
+        try {
+            // Scan the source text directly so unresolved-yet-valid imports still
+            // participate in cross-file go-to-definition.
+            for (String line : (lastSourceText ?: "").readLines()) {
+                def importMatch = (line =~ /^\s*import\s+([A-Za-z_][A-Za-z0-9_\.]*)(?:\s+as\s+([A-Za-z_][A-Za-z0-9_]*))?\s*$/)
+                if (!importMatch.find()) {
+                    continue
+                }
+                String fqcn = importMatch.group(1)
+                if (!fqcn || fqcn.endsWith(".*")) {
+                    continue
+                }
+                String importedName = fqcn.tokenize('.').last()
+                String alias = importMatch.group(2)
+                if (!(word in [importedName, alias].findAll { it })) {
+                    continue
+                }
+                File sourceFile = findProjectSourceFile(fqcn)
+                if (!sourceFile) {
+                    continue
+                }
+                Map resolved = resolveProjectSourceSymbol(sourceFile, importedName)
+                if (resolved) {
+                    return resolved
+                }
+            }
+        } catch (Throwable t) {
+            Logging.log("Imported source lookup failed for '${word}': ${t.class.name}: ${t.message}")
+        }
+        return null
+    }
+
+    /**
+     * Shared library projects commonly keep Groovy sources under `src/`; the
+     * test fixtures in this repo additionally use `tests/src`.
+     */
+    private static List<File> findProjectSourceRoots(File projectRoot) {
+        if (!projectRoot) return []
+        Map<String, File> uniqueRoots = [:]
+        [
+            "src",
+            "src/main/groovy",
+            "src/test/groovy",
+            "tests/src"
+        ].each { String relativePath ->
+            File candidate = canonicalFile(new File(projectRoot, relativePath))
+            if (candidate?.isDirectory()) {
+                uniqueRoots[candidate.absolutePath] = candidate
+            }
+        }
+        return uniqueRoots.values() as List<File>
+    }
+
+    /**
+     * Translate an imported fully qualified class name into an on-disk Groovy
+     * source file within the current project.
+     */
+    private File findProjectSourceFile(String fqcn) {
+        if (!fqcn) return null
+        String relativePath = fqcn.replace('.' as char, File.separatorChar) + ".groovy"
+        for (File root : findProjectSourceRoots(lastProjectRoot)) {
+            File candidate = canonicalFile(new File(root, relativePath))
+            if (candidate?.isFile()) {
+                return candidate
+            }
+        }
+        return null
+    }
+
+    /**
+     * Re-parse the target source file on demand so the returned location points
+     * at the real class declaration, not just the import statement.
+     */
+    private Map resolveProjectSourceSymbol(File sourceFile, String symbolName) {
+        if (!sourceFile || !symbolName) return null
+        try {
+            String text = sourceFile.getText("UTF-8")
+            List<String> lines = (text ?: "").readLines()
+            Parser.ParseResult pr = Parser.parseGroovy(text ?: "", findProjectSourceRoots(lastProjectRoot))
+            Map symbol = AstNavigator.findTopLevelClassOrMethod(pr?.unit, symbolName, lines)
+            if (!symbol) {
+                return null
+            }
+            return [
+                uri: sourceFile.toURI().toString(),
+                line: symbol.line as int,
+                column: symbol.column as int,
+                wordLength: symbol.word?.length() ?: symbolName.length()
+            ]
+        } catch (Throwable t) {
+            Logging.log("Unable to resolve imported source symbol '${symbolName}' in ${sourceFile}: ${t.class.name}: ${t.message}")
+            return null
+        }
     }
 
     private static List<Map> collectVarsArityDiagnostics(SourceUnit unit, File documentFile, VarsSymbolIndex varsIndex) {
